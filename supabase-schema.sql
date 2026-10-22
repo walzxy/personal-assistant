@@ -35,3 +35,18 @@ create policy "Users can delete their own workspace"
   on public.workspace_state for delete
   to authenticated
   using (auth.uid() = user_id);
+
+-- Enable cross-device live updates for the frontend and OpenClaw.
+do $$
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime')
+     and not exists (
+       select 1
+       from pg_publication_tables
+       where pubname = 'supabase_realtime'
+         and schemaname = 'public'
+         and tablename = 'workspace_state'
+     ) then
+    alter publication supabase_realtime add table public.workspace_state;
+  end if;
+end $$;
