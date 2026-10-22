@@ -46,6 +46,7 @@ let cloudClientReady = false;
 let cloudStateVersion = 0;
 let cloudSyncedVersion = 0;
 let cloudRealtimeChannel = null;
+let cloudSyncError = "";
 
 function normalizeState(saved) {
   return {
@@ -80,11 +81,16 @@ function loadState() {
   };
 }
 
-function saveState() {
+function saveState({ immediate = false } = {}) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   localStorage.setItem(`${STORAGE_KEY}:updatedAt`, new Date().toISOString());
   cloudStateVersion += 1;
+  if (immediate) {
+    clearTimeout(cloudSyncTimer);
+    return syncStateToCloud();
+  }
   queueCloudSync();
+  return Promise.resolve({ ok: false, queued: true });
 }
 
 function setSyncStatus(message, tone = "local") {
@@ -105,7 +111,8 @@ function updateCloudControls() {
     if (github) github.hidden = true;
     if (submit) submit.hidden = true;
     if (submit) submit.disabled = false;
-    setSyncStatus(cloudSyncReady ? "Cloud workspace synced" : "Cloud account connected", cloudSyncReady ? "cloud" : "pending");
+    const identity = cloudSession.user.email || cloudSession.user.app_metadata?.provider || "account";
+    setSyncStatus(cloudSyncReady ? `Cloud ready · ${identity}` : cloudSyncError || "Connecting to cloud…", cloudSyncReady ? "cloud" : cloudSyncError ? "error" : "pending");
   } else {
     button.textContent = "Connect cloud sync";
     if (signOut) signOut.hidden = true;
@@ -123,7 +130,9 @@ function queueCloudSync() {
 }
 
 async function syncStateToCloud() {
-  if (!cloudSession || !supabaseClient || cloudSyncInFlight) return;
+  if (!cloudSession || !supabaseClient) return { ok: false, reason: "not-connected" };
+  if (cloudSyncInFlight) return { ok: false, reason: "queued" };
+  if (!cloudSyncReady) return { ok: false, reason: "cloud-not-ready" };
   cloudSyncInFlight = true;
   const versionAtStart = cloudStateVersion;
   setSyncStatus("Saving to cloud…", "pending");
@@ -131,13 +140,16 @@ async function syncStateToCloud() {
   cloudSyncInFlight = false;
   if (error) {
     console.error("Cloud save failed", error);
-    setSyncStatus("Cloud sync needs setup", "error");
-    return;
+    cloudSyncError = `Cloud save failed: ${error.message}`;
+    setSyncStatus(cloudSyncError, "error");
+    return { ok: false, reason: "cloud-error", message: error.message };
   }
+  cloudSyncError = "";
   cloudSyncedVersion = versionAtStart;
   cloudSyncReady = true;
   updateCloudControls();
   if (cloudStateVersion > cloudSyncedVersion) queueCloudSync();
+  return { ok: true };
 }
 
 function applyIncomingCloudState(nextState, updatedAt) {
@@ -150,8 +162,9 @@ function applyIncomingCloudState(nextState, updatedAt) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   localStorage.setItem(`${STORAGE_KEY}:updatedAt`, updatedAt || new Date().toISOString());
   cloudSyncedVersion = cloudStateVersion;
+  cloudSyncError = "";
   render();
-  setSyncStatus("Cloud workspace synced", "cloud");
+  setSyncStatus("Cloud workspace ready", "cloud");
 }
 
 function subscribeToCloudChanges() {
@@ -167,26 +180,33 @@ function subscribeToCloudChanges() {
 
 async function hydrateStateFromCloud() {
   if (!cloudSession || !supabaseClient) return;
+  const localVersionAtLoadStart = cloudStateVersion;
   cloudSyncReady = false;
   setSyncStatus("Loading cloud workspace…", "pending");
   const { data, error } = await supabaseClient.from("workspace_state").select("state, updated_at").eq("user_id", cloudSession.user.id).maybeSingle();
   if (error) {
     console.error("Cloud load failed", error);
-    setSyncStatus("Run the Supabase schema first", "error");
+    cloudSyncReady = false;
+    cloudSyncError = error.message?.includes("workspace_state") ? "Cloud table unavailable — run the Supabase schema" : `Cloud load failed: ${error.message}`;
+    setSyncStatus(cloudSyncError, "error");
     return;
   }
   if (data?.state && typeof data.state === "object") {
-    Object.assign(state, normalizeState(data.state));
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    localStorage.setItem(`${STORAGE_KEY}:updatedAt`, data.updated_at || new Date().toISOString());
-    cloudSyncedVersion = cloudStateVersion;
-    render();
+    if (cloudStateVersion === localVersionAtLoadStart) {
+      Object.assign(state, normalizeState(data.state));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      localStorage.setItem(`${STORAGE_KEY}:updatedAt`, data.updated_at || new Date().toISOString());
+      cloudSyncedVersion = cloudStateVersion;
+      render();
+    }
   } else {
     cloudSyncReady = true;
     await syncStateToCloud();
   }
+  cloudSyncError = "";
   cloudSyncReady = true;
   updateCloudControls();
+  if (cloudStateVersion > cloudSyncedVersion) queueCloudSync();
 }
 
 async function initCloudSync() {
@@ -506,7 +526,7 @@ function removeSubtask(taskId, index) { const task = state.tasks.find((item) => 
 function openCompletionPrompt(taskId, childIndex = null) { const task = state.tasks.find((item) => item.id === taskId); if (!task) return; pendingCompletion = { taskId, childIndex }; const child = childIndex == null ? null : task.children?.[childIndex]; $("#completionMessage").textContent = child ? `“${child.title}” reached 100%. Confirm that this subtask is actually complete.` : `“${task.title}” reached 100%. Confirm that this task is actually complete.`; $("#completionModal").showModal(); }
 function applyPendingCompletion() { if (!pendingCompletion) return; const task = state.tasks.find((item) => item.id === pendingCompletion.taskId); if (!task) return; if (pendingCompletion.childIndex == null) { task.status = "done"; task.progress = 100; } else { const child = task.children?.[pendingCompletion.childIndex]; if (!child) return; child.progress = 100; child.status = "done"; } pendingCompletion = null; saveState(); $("#completionModal").close(); if ($("#taskDetailModal").open) $("#taskDetailModal").close(); render(); toast("Completion confirmed."); }
 function confirmChild(taskId, index) { const task = state.tasks.find((item) => item.id === taskId); const child = task?.children?.[index]; if (!child) return; child.progress = 100; child.status = "pending_confirmation"; saveState(); openCompletionPrompt(taskId, index); }
-function saveTaskChanges() {
+async function saveTaskChanges() {
   const task = state.tasks.find((item) => item.id === currentDetailTaskId);
   if (!task) return;
   task.title = $("#editTitle").value.trim() || task.title;
@@ -553,12 +573,17 @@ function saveTaskChanges() {
     task.status = enteredProgress >= 100 ? (task.status === "done" ? "done" : "pending_confirmation") : enteredProgress > 0 ? "in_progress" : "not_started";
   }
 
-  saveState();
+  const cloudSave = saveState({ immediate: true });
   $("#taskDetailModal").close();
   render();
   if (pendingChildIndex != null) openCompletionPrompt(task.id, pendingChildIndex);
   else if (task.status === "pending_confirmation") openCompletionPrompt(task.id);
-  else toast("Task changes saved locally and will sync when online.");
+  const result = await cloudSave;
+  if (result?.ok) toast("Task changes saved to cloud.");
+  else if (result?.reason === "not-connected") toast("Saved on this device only. Connect cloud sync to share it.");
+  else if (result?.reason === "cloud-not-ready") toast("Saved locally. Cloud is still connecting; keep this page open to sync.");
+  else if (result?.reason === "queued") toast("Saved locally. The previous cloud save is finishing.");
+  else toast(`Saved locally, but cloud sync failed: ${result?.message || "check your connection"}.`);
 }
 
 function setTaskProgress(taskId, progress) { const task = state.tasks.find((item) => item.id === taskId); if (!task) return; const wasOpen = $("#taskDetailModal").open; if (wasOpen) $("#taskDetailModal").close(); if (task.type === "regular" && task.children?.length) task.progressOverride = progress; task.progress = progress; task.status = progress >= 100 ? "pending_confirmation" : progress > 0 ? "in_progress" : "not_started"; saveState(); render(); if (progress >= 100) openCompletionPrompt(taskId); else { openTaskDetail(taskId, wasOpen); toast(`Progress updated to ${progress}%.`); } }
@@ -668,6 +693,8 @@ $("#insightTrigger").addEventListener("click", () => $("#insightColumn").classLi
 $$('.nav-item').forEach((item) => item.addEventListener("click", () => { currentView = item.dataset.view; currentTab = currentView === "assignment" ? "board" : "today"; $$(".nav-item").forEach((nav) => nav.classList.toggle("active", nav === item)); if (currentView === "assignment") { $("#pageTitle").textContent = "Assignment and goal"; } else { $("#pageTitle").textContent = placeholderText(currentView).title; } resetPageScroll(); render(); closeSidebar(); }));
 $$('.view-tab').forEach((tab) => tab.addEventListener("click", () => { currentTab = tab.dataset.tab; resetPageScroll(); renderActiveTab(); }));
 window.addEventListener("keydown", (event) => { if (event.key === "Escape") closeSidebar(); });
+window.addEventListener("offline", () => { if (cloudSession) setSyncStatus("Offline — local changes are queued", "pending"); });
+window.addEventListener("online", async () => { if (cloudSession) await hydrateStateFromCloud(); });
 function closeSidebar() { $("#sidebar").classList.remove("open"); $("#scrim").classList.remove("open"); }
 function resetPageScroll() { window.scrollTo({ top: 0, left: 0, behavior: "auto" }); document.documentElement.scrollTop = 0; document.body.scrollTop = 0; $(".main-column")?.scrollTo({ top: 0, left: 0, behavior: "auto" }); }
 
