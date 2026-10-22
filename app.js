@@ -6,7 +6,6 @@ const DEFAULT_TAG_COLOR = { regular: "#8EA1B5", standalone: "#D9A05B", "long-ter
 const PENDING_SYNC_KEY = `${STORAGE_KEY}:pending-cloud`;
 const CLOUD_BACKUP_KEY = `${STORAGE_KEY}:cloud-backup`;
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const DAY_NAMES_ZH = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 const SUPABASE_URL = "https://wqbrteepiwfzgznsuahs.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_c3IgjWyKNWBXI8Fa3XV7jA_0RdSj_1H";
 const CLOUD_SYNC_DELAY = 700;
@@ -40,6 +39,8 @@ let showIncompleteOnly = false;
 let pendingImport = null;
 let currentDetailTaskId = null;
 let pendingCompletion = null;
+let activePomodoro = null;
+let pendingTimerSync = null;
 let supabaseClient = null;
 let cloudSession = null;
 let cloudSyncTimer = null;
@@ -98,7 +99,7 @@ function loadState() {
   };
 }
 
-function saveState({ immediate = false } = {}) {
+function saveState({ immediate = true } = {}) {
   const updatedAt = new Date().toISOString();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   localStorage.setItem(`${STORAGE_KEY}:updatedAt`, updatedAt);
@@ -152,18 +153,29 @@ function queueCloudSync() {
 
 async function syncStateToCloud() {
   if (!cloudSession || !supabaseClient) return { ok: false, reason: "not-connected" };
-  if (cloudSyncInFlight) return { ok: false, reason: "queued" };
+  if (cloudSyncInFlight) {
+    clearTimeout(cloudSyncTimer);
+    cloudSyncTimer = setTimeout(syncStateToCloud, 250);
+    return { ok: false, reason: "queued" };
+  }
   if (!cloudSyncReady) return { ok: false, reason: "cloud-not-ready" };
   cloudSyncInFlight = true;
   const versionAtStart = cloudStateVersion;
   const snapshot = JSON.parse(JSON.stringify(state));
   setSyncStatus("Saving to cloud…", "pending");
-  const { error } = await supabaseClient.from("workspace_state").upsert({ user_id: cloudSession.user.id, state: snapshot, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+  let error = null;
+  try {
+    ({ error } = await supabaseClient.from("workspace_state").upsert({ user_id: cloudSession.user.id, state: snapshot, updated_at: new Date().toISOString() }, { onConflict: "user_id" }));
+  } catch (caught) {
+    error = { message: caught?.message || "Network request failed" };
+  }
   cloudSyncInFlight = false;
   if (error) {
     console.error("Cloud save failed", error);
     cloudSyncError = `Cloud save failed: ${error.message}`;
     setSyncStatus(cloudSyncError, "error");
+    clearTimeout(cloudSyncTimer);
+    cloudSyncTimer = setTimeout(syncStateToCloud, 5000);
     return { ok: false, reason: "cloud-error", message: error.message };
   }
   cloudSyncError = "";
@@ -206,7 +218,13 @@ async function hydrateStateFromCloud() {
   const localVersionAtLoadStart = cloudStateVersion;
   cloudSyncReady = false;
   setSyncStatus("Syncing…", "pending");
-  const { data, error } = await supabaseClient.from("workspace_state").select("state, updated_at").eq("user_id", cloudSession.user.id).maybeSingle();
+  let data = null;
+  let error = null;
+  try {
+    ({ data, error } = await supabaseClient.from("workspace_state").select("state, updated_at").eq("user_id", cloudSession.user.id).maybeSingle());
+  } catch (caught) {
+    error = { message: caught?.message || "Network request failed" };
+  }
   if (error) {
     console.error("Cloud load failed", error);
     cloudSyncReady = false;
@@ -298,11 +316,24 @@ function taskColor(task) { return task.tagColor || DEFAULT_TAG_COLOR[task.type] 
 function hexToRgba(hex, alpha = 0.1) { const clean = hex.replace("#", ""); const value = clean.length === 3 ? clean.split("").map((part) => part + part).join("") : clean; const number = Number.parseInt(value, 16); return `rgba(${number >> 16}, ${(number >> 8) & 255}, ${number & 255}, ${alpha})`; }
 function taskStatusLabel(task) { return task.status === "done" ? "Completed" : task.status === "pending_confirmation" ? "Confirm completion" : task.status === "in_progress" ? "In progress" : "Not started"; }
 
+function dateKey(value) {
+  if (!value) return "";
+  if (value instanceof Date) return isoDate(value);
+  const text = String(value).trim();
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) return `${iso[1]}-${String(iso[2]).padStart(2, "0")}-${String(iso[3]).padStart(2, "0")}`;
+  const slash = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+  if (slash) return `${slash[3]}-${String(slash[1]).padStart(2, "0")}-${String(slash[2]).padStart(2, "0")}`;
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? text : isoDate(parsed);
+}
+
 function tasksForDate(date) {
+  const targetDate = dateKey(date);
   return state.tasks.flatMap((task) => {
-    if (task.type === "long-term") return (task.children || []).filter((child) => child.date === date).map((child) => ({ ...child, parentId: task.id, parentTitle: task.title, type: "subtask", estimateHours: child.estimateHours || 1, difficulty: child.difficulty || task.difficulty, tagColor: child.tagColor || task.tagColor, scheduledDate: child.date, timerStartedAt: task.timerStartedAt, actualSeconds: task.actualSeconds, actualMinutes: task.actualMinutes }));
-    if (task.children?.length) return task.children.filter((child) => child.date === date).map((child) => ({ ...child, parentId: task.id, parentTitle: task.title, type: "subtask", estimateHours: child.estimateHours || task.estimateHours / task.children.length, difficulty: child.difficulty || task.difficulty, tagColor: child.tagColor || task.tagColor, scheduledDate: child.date, timerStartedAt: task.timerStartedAt, actualSeconds: task.actualSeconds, actualMinutes: task.actualMinutes }));
-    return task.scheduledDate === date ? [task] : [];
+    if (task.type === "long-term") return (task.children || []).filter((child) => dateKey(child.date) === targetDate).map((child) => ({ ...child, parentId: task.id, parentTitle: task.title, type: "subtask", estimateHours: child.estimateHours || 1, difficulty: child.difficulty || task.difficulty, tagColor: child.tagColor || task.tagColor, scheduledDate: dateKey(child.date), actualSeconds: task.actualSeconds, actualMinutes: task.actualMinutes }));
+    if (task.children?.length) return task.children.filter((child) => dateKey(child.date) === targetDate).map((child) => ({ ...child, parentId: task.id, parentTitle: task.title, type: "subtask", estimateHours: child.estimateHours || task.estimateHours / task.children.length, difficulty: child.difficulty || task.difficulty, tagColor: child.tagColor || task.tagColor, scheduledDate: dateKey(child.date), actualSeconds: task.actualSeconds, actualMinutes: task.actualMinutes }));
+    return dateKey(task.scheduledDate) === targetDate ? [{ ...task, scheduledDate: dateKey(task.scheduledDate) }] : [];
   });
 }
 
@@ -324,6 +355,7 @@ function batteryProgressBar(progress, weight = 1, orientation = "horizontal", sh
   return `<div class="battery-progress ${orientation}" data-weight="${weight}" aria-label="Progress ${value}%, weight ${weight}"><div class="energy-grid">${Array.from({ length: 10 }, (_, index) => { const isPartial = index === filled && partial > 0 && filled < 10; return `<span class="energy-cell ${index < filled ? `filled ${color}` : isPartial ? `partial ${color}` : ""}" ${isPartial ? `style="--partial-fill:${partial * 10}%"` : ""}></span>`; }).join("")}</div>${showValue ? `<span class="battery-value">${value}%${face}</span>` : ""}</div>`;
 }
 function energyMarkup(progress, extraClass = "") { return batteryProgressBar(progress, 1, extraClass.includes("vertical") ? "vertical" : "horizontal", false); }
+function playIcon() { return '<svg class="timer-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 5.14v13.72a1.5 1.5 0 0 0 2.27 1.29l10.3-6.86a1.55 1.55 0 0 0 0-2.58L10.27 3.85A1.5 1.5 0 0 0 8 5.14Z" fill="currentColor"></path></svg>'; }
 
 function render() {
   renderDateHeader();
@@ -362,7 +394,8 @@ function renderTimeline() {
     const completed = entry.kind === "task" && entry.status === "done";
     const meta = entry.kind === "course" ? [entry.room, entry.teacher].filter(Boolean).join(" · ") : entry.kind === "event" ? "Event" : `${TYPE_LABEL[entry.type] || "Task"}${conflict ? " · overlaps a course" : ""}`;
     const color = entry.kind === "task" ? taskColor(entry) : entry.color || "#CDBBA0";
-    return `<div class="timeline-item ${entry.kind} ${completed ? "completed" : ""} ${conflict ? "conflict" : ""} ${entry.difficulty === "hard" ? "hard" : ""}" style="--task-color:${color};--task-tint:${hexToRgba(color)}"><div class="timeline-time">${entry.start}<br>${entry.end}</div><div class="timeline-line"></div><div><div class="timeline-title">${escapeHtml(entry.title || entry.name)}</div><div class="timeline-meta">${escapeHtml(meta || "Time block")}</div></div>${entry.kind === "task" ? `<button class="timeline-action" data-open-task="${entry.parentId || entry.id}">${completed ? "✓" : "Open"}</button>` : entry.kind === "event" ? `<button class="timeline-action" data-open-event="${entry.id}">Event</button>` : `<span class="timeline-action">Course</span>`}</div>`;
+    const progress = entry.kind === "task" ? taskProgress(entry) : null;
+    return `<div class="timeline-item ${entry.kind} ${completed ? "completed" : ""} ${conflict ? "conflict" : ""} ${entry.difficulty === "hard" ? "hard" : ""}" style="--task-color:${color};--task-tint:${hexToRgba(color)}"><div class="timeline-time">${entry.start}<br>${entry.end}</div><div class="timeline-line"></div><div><div class="timeline-title">${escapeHtml(entry.title || entry.name)}</div><div class="timeline-meta">${escapeHtml(meta || "Time block")}</div>${entry.kind === "task" ? `<div class="timeline-progress">${batteryProgressBar(progress, difficultyWeight(entry))}</div>` : ""}</div>${entry.kind === "task" ? `<button class="timeline-action" data-open-task="${entry.parentId || entry.id}">${completed ? "✓" : "Open"}</button>` : entry.kind === "event" ? `<button class="timeline-action" data-open-event="${entry.id}">Event</button>` : `<span class="timeline-action">Course</span>`}</div>`;
   }).join("");
   $("#timeline").querySelectorAll("[data-open-task]").forEach((button) => button.addEventListener("click", () => openTaskDetail(button.dataset.openTask)));
   $("#timeline").querySelectorAll("[data-open-event]").forEach((button) => button.addEventListener("click", () => openEventDetail(button.dataset.openEvent)));
@@ -377,10 +410,10 @@ function renderTasks() {
     const status = task.status === "pending_confirmation" || progress >= 100 && task.status !== "done" ? "pending" : task.status === "done" ? "done" : "";
     const detailId = task.parentId || task.id;
     const childText = task.type === "subtask" ? `<span class="subtask-marker" title="Sub-task">⌘</span> ${escapeHtml(task.parentTitle)}` : task.children?.length ? `${task.children.length} subtasks` : `${task.estimateHours || 0}h estimated`;
-    return `<article class="task-card ${task.difficulty === "hard" ? "hard" : ""} ${task.status === "done" ? "completed" : ""}" style="--task-color:${taskColor(task)};--task-tint:${hexToRgba(taskColor(task))}"><div class="task-card-top"><div><div class="task-card-title"><span class="task-color-dot"></span>${escapeHtml(task.title)}</div><div class="task-card-meta">${childText}</div></div><div class="task-card-actions"><span class="status-pill ${status}">${status === "pending" ? "Confirm" : status === "done" ? "Done" : task.status === "in_progress" ? "In progress" : "Not started"}</span><button class="icon-button detail-arrow" data-open-task="${detailId}" aria-label="打开任务">›</button></div></div><div class="progress-row">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div><div class="task-footer"><span data-timer-minutes="${detailId}">${trackedMinutes(task)} min tracked</span><button class="timer-button ${task.timerStartedAt ? "running" : ""}" data-start-task="${detailId}" aria-label="${task.timerStartedAt ? "Pause timer" : "Start timer"}">${task.timerStartedAt ? "■" : "▶"}</button></div>${task.children?.length && task.type !== "long-term" ? `<div class="subtask-note">${task.children.map((child) => `${child.status === "done" ? "✓" : "○"} ${escapeHtml(child.title)}`).join("　")}</div>` : ""}</article>`;
+    return `<article class="task-card ${task.difficulty === "hard" ? "hard" : ""} ${task.status === "done" ? "completed" : ""}" style="--task-color:${taskColor(task)};--task-tint:${hexToRgba(taskColor(task))}"><div class="task-card-top"><div><div class="task-card-title"><span class="task-color-dot"></span>${escapeHtml(task.title)}</div><div class="task-card-meta">${childText}</div></div><div class="task-card-actions"><span class="status-pill ${status}">${status === "pending" ? "Confirm" : status === "done" ? "Done" : task.status === "in_progress" ? "In progress" : "Not started"}</span><button class="icon-button detail-arrow" data-open-task="${detailId}" aria-label="打开任务">›</button></div></div><div class="progress-row">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div><div class="task-footer"><span data-timer-minutes="${detailId}">${trackedMinutes(task)} min focused</span><button class="timer-button" data-open-timer="${detailId}" aria-label="Open Pomodoro timer">${playIcon()}</button></div>${task.children?.length && task.type !== "long-term" ? `<div class="subtask-note">${task.children.map((child) => `${child.status === "done" ? "✓" : "○"} ${escapeHtml(child.title)}`).join("　")}</div>` : ""}</article>`;
   }).join("");
   $("#taskList").querySelectorAll("[data-open-task]").forEach((button) => button.addEventListener("click", () => openTaskDetail(button.dataset.openTask)));
-  $("#taskList").querySelectorAll("[data-start-task]").forEach((button) => button.addEventListener("click", () => toggleTimer(button.dataset.startTask)));
+  $("#taskList").querySelectorAll("[data-open-timer]").forEach((button) => button.addEventListener("click", () => openPomodoro(button.dataset.openTimer)));
 }
 
 function renderLongTerm() {
@@ -432,8 +465,8 @@ function addDays(value, amount) { const date = parseDate(value); date.setDate(da
 function weekDatesFor(value = selectedDate) { const base = parseDate(value); const monday = new Date(base); const day = monday.getDay() || 7; monday.setDate(monday.getDate() - day + 1); return Array.from({ length: 7 }, (_, i) => addDays(isoDate(monday), i)); }
 function boardItems() {
   return state.tasks.flatMap((task) => {
-    if (task.children?.length && ["regular", "long-term"].includes(task.type)) return task.children.map((child) => ({ ...child, id: child.id, sourceId: child.id, parentId: task.id, parentTitle: task.title, type: "subtask", scheduledDate: child.date, estimateHours: child.estimateHours || Math.max(.25, (task.estimateHours || 1) / task.children.length), difficulty: child.difficulty || task.difficulty, tagColor: child.tagColor || task.tagColor, timerStartedAt: task.timerStartedAt, actualSeconds: task.actualSeconds, actualMinutes: task.actualMinutes }));
-    return task;
+    if (task.children?.length && ["regular", "long-term"].includes(task.type)) return task.children.map((child) => ({ ...child, id: child.id, sourceId: child.id, parentId: task.id, parentTitle: task.title, type: "subtask", scheduledDate: dateKey(child.date), estimateHours: child.estimateHours || Math.max(.25, (task.estimateHours || 1) / task.children.length), difficulty: child.difficulty || task.difficulty, tagColor: child.tagColor || task.tagColor, actualSeconds: task.actualSeconds, actualMinutes: task.actualMinutes }));
+    return { ...task, scheduledDate: dateKey(task.scheduledDate) };
   }).filter((task) => task.scheduledDate);
 }
 function updateScheduledDate(item, date, startTime = null, endTime = null) {
@@ -450,20 +483,20 @@ function renderBoardView() {
   const today = todayIso(); const tomorrow = addDays(today, 1); const week = weekDatesFor(today); const groups = { today: [], tomorrow: [], week: [] };
   boardItems().forEach((item) => { const bucket = boardBucket(item.scheduledDate, today, tomorrow, week); if (bucket) groups[bucket].push(item); });
   const columns = [["today", "Today", formatEnglishDate(today)], ["tomorrow", "Tomorrow", formatEnglishDate(tomorrow)], ["week", "This week", `${formatEnglishDate(week[0])} — ${formatEnglishDate(week[6])}`]];
-  return `<div class="board-heading section-heading"><div><h2>Task board</h2></div><div class="board-hint">${boardItems().length} actionable items</div></div><div class="kanban-board">${columns.map(([key, title, subtitle]) => `<section class="kanban-column" data-board-column="${key}" data-drop-date="${key === "today" ? today : key === "tomorrow" ? tomorrow : addDays(today, 2)}"><div class="kanban-column-header"><div><h3>${title}</h3><span>${subtitle}</span></div><b>${groups[key].length}</b></div><div class="board-drop-zone">${groups[key].length ? groups[key].map((item) => { const progress = taskProgress(item); const owner = item.parentId || item.id; return `<article class="kanban-card ${item.difficulty === "hard" ? "hard" : ""}" draggable="true" data-board-id="${item.id}" data-board-parent="${item.parentId || ""}" data-open-task="${owner}" style="--task-color:${taskColor(item)};--task-tint:${hexToRgba(taskColor(item))}"><div class="kanban-card-title"><span class="task-color-dot"></span><span>${escapeHtml(item.title)}</span></div><div class="kanban-card-meta"><span>${Number(item.estimateHours || 0).toLocaleString("en-US")}h${item.parentId ? ` · ${escapeHtml(item.parentTitle)}` : ""}</span><span>${item.scheduledDate === today ? "Today" : formatEnglishDate(item.scheduledDate)}</span></div><div class="kanban-card-footer">${batteryProgressBar(progress, difficultyWeight(item), "vertical")}<button class="timer-button ${item.timerStartedAt ? "running" : ""}" data-start-task="${owner}" aria-label="${item.timerStartedAt ? "Pause timer" : "Start timer"}">${item.timerStartedAt ? "■" : "▶"}</button></div></article>`; }).join("") : `<div class="board-empty">Drop a task here</div>`}</div></section>`).join("")}</div>`;
+  return `<div class="board-heading section-heading"><div><h2>Task board</h2></div><div class="board-hint">${boardItems().length} actionable items</div></div><div class="kanban-board">${columns.map(([key, title, subtitle]) => `<section class="kanban-column" data-board-column="${key}" data-drop-date="${key === "today" ? today : key === "tomorrow" ? tomorrow : addDays(today, 2)}"><div class="kanban-column-header"><div><h3>${title}</h3><span>${subtitle}</span></div><b>${groups[key].length}</b></div><div class="board-drop-zone">${groups[key].length ? groups[key].map((item) => { const progress = taskProgress(item); const owner = item.parentId || item.id; return `<article class="kanban-card ${item.difficulty === "hard" ? "hard" : ""}" draggable="true" data-board-id="${item.id}" data-board-parent="${item.parentId || ""}" data-open-task="${owner}" style="--task-color:${taskColor(item)};--task-tint:${hexToRgba(taskColor(item))}"><div class="kanban-card-title"><span class="task-color-dot"></span><span>${escapeHtml(item.title)}</span></div><div class="kanban-card-meta"><span>${Number(item.estimateHours || 0).toLocaleString("en-US")}h${item.parentId ? ` · ${escapeHtml(item.parentTitle)}` : ""}</span><span>${item.scheduledDate === today ? "Today" : formatEnglishDate(item.scheduledDate)}</span></div><div class="kanban-card-footer">${batteryProgressBar(progress, difficultyWeight(item), "vertical")}<button class="timer-button" data-open-timer="${owner}" aria-label="Open Pomodoro timer">${playIcon()}</button></div></article>`; }).join("") : `<div class="board-empty">Drop a task here</div>`}</div></section>`).join("")}</div>`;
 }
 function bindBoardView() {
   $$(`[data-board-id]`).forEach((card) => {
     card.addEventListener("dragstart", (event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", JSON.stringify({ id: card.dataset.boardId, parentId: card.dataset.boardParent })); card.classList.add("dragging"); });
     card.addEventListener("dragend", () => card.classList.remove("dragging"));
-    card.addEventListener("click", (event) => { if (!event.target.closest("[data-start-task]")) openTaskDetail(card.dataset.openTask, true); });
+    card.addEventListener("click", (event) => { if (!event.target.closest("[data-open-timer]")) openTaskDetail(card.dataset.openTask, true); });
   });
   $$(`[data-board-column]`).forEach((column) => {
     column.addEventListener("dragover", (event) => { event.preventDefault(); column.classList.add("drag-over"); });
     column.addEventListener("dragleave", () => column.classList.remove("drag-over"));
     column.addEventListener("drop", (event) => { event.preventDefault(); column.classList.remove("drag-over"); try { const payload = JSON.parse(event.dataTransfer.getData("text/plain")); const source = boardItems().find((item) => item.id === payload.id && (item.parentId || "") === (payload.parentId || "")); if (!source) return; const targetDate = column.dataset.dropDate; if (updateScheduledDate(source, targetDate)) { saveState(); selectedDate = targetDate; render(); toast(`Scheduled for ${formatShortDate(targetDate)}.`); } } catch (error) { console.warn("Board drop ignored", error); } });
   });
-  $$(`[data-start-task]`).forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); toggleTimer(button.dataset.startTask); }));
+  $$(`[data-open-timer]`).forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); openPomodoro(button.dataset.openTimer); }));
 }
 
 const CALENDAR_START = 8 * 60;
@@ -472,20 +505,36 @@ const CALENDAR_SLOT_HEIGHT = 10;
 function timeToMinutes(value) { if (!value) return null; const [hours, minutes] = value.split(":").map(Number); return hours * 60 + minutes; }
 function minutesToTime(value) { const minutes = Math.max(0, Math.round(value)); return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`; }
 function snapToFive(value) { return Math.round(value / 5) * 5; }
-function eventOccurrencesForDate(date) { return (state.events || []).filter((event) => event.date === date && event.start && event.end).map((event) => ({ ...event, kind: "event", name: event.name || event.title || "Event" })); }
-function calendarItemsForDate(date) { return { courses: [...courseOccurrencesForDate(date), ...eventOccurrencesForDate(date)].filter((item) => item.start && item.end), tasks: tasksForDate(date).filter((item) => item.startTime && item.endTime) }; }
+function eventOccurrencesForDate(date) { const targetDate = dateKey(date); return (state.events || []).filter((event) => dateKey(event.date) === targetDate && event.start && event.end).map((event) => ({ ...event, date: targetDate, kind: "event", name: event.name || event.title || "Event" })); }
+function calendarItemsForDate(date) { const targetDate = dateKey(date); return { courses: [...courseOccurrencesForDate(targetDate), ...eventOccurrencesForDate(targetDate)].filter((item) => item.start && item.end), tasks: tasksForDate(targetDate) }; }
 let currentEventId = null;
 function openEventDetail(eventId = null) { const event = (state.events || []).find((item) => item.id === eventId); currentEventId = event?.id || null; $("#eventModalTitle").textContent = event ? "Edit event" : "Add an event"; $("#eventTitle").value = event?.name || event?.title || ""; $("#eventDate").value = event?.date || selectedDate; $("#eventStart").value = event?.start || "09:00"; $("#eventEnd").value = event?.end || "10:00"; $("#eventColor").value = event?.color || "#E8DCD1"; $("#eventNotes").value = event?.notes || ""; $("#deleteEventButton").hidden = !event; $("#eventModal").showModal(); }
 function saveEventForm(event) { event.preventDefault(); if (event.submitter?.value === "cancel") { $("#eventModal").close(); currentEventId = null; return; } const title = $("#eventTitle").value.trim(); const date = $("#eventDate").value; const start = $("#eventStart").value; const end = $("#eventEnd").value; if (!title || !date || !start || !end) return; if (timeToMinutes(end) <= timeToMinutes(start)) { toast("End time must be after start time."); return; } const wasEditing = Boolean(currentEventId); state.events ||= []; const record = { id: currentEventId || uid("event"), name: title, title, date, start, end, color: $("#eventColor").value, notes: $("#eventNotes").value.trim(), kind: "event" }; if (currentEventId) { const index = state.events.findIndex((item) => item.id === currentEventId); if (index >= 0) state.events[index] = { ...state.events[index], ...record }; } else state.events.push(record); saveState(); $("#eventModal").close(); selectedDate = date; currentTab = "week"; render(); toast(wasEditing ? "Event updated." : "Event added."); currentEventId = null; }
 function deleteEvent() { if (!currentEventId) return; const event = state.events.find((item) => item.id === currentEventId); if (!event) return; state.events = state.events.filter((item) => item.id !== currentEventId); saveState(); $("#eventModal").close(); currentEventId = null; render(); toast("Event deleted."); }
 function layoutCalendarTasks(tasks) {
-  const sorted = [...tasks].sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime) || timeToMinutes(a.endTime) - timeToMinutes(b.endTime)); const lanes = []; const placed = [];
-  sorted.forEach((task) => { const start = timeToMinutes(task.startTime); const end = timeToMinutes(task.endTime); let lane = lanes.findIndex((lastEnd) => start >= lastEnd); if (lane < 0) { lane = lanes.length; lanes.push(end); } else lanes[lane] = end; placed.push({ task, start, end, lane }); });
-  return placed.map((item) => { const connected = placed.filter((other) => other.start < item.end && other.end > item.start); const laneCount = Math.max(1, connected.length ? Math.max(...connected.map((other) => other.lane + 1)) : 1); return { ...item, laneCount }; });
+  const sorted = [...tasks].sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime) || timeToMinutes(a.endTime) - timeToMinutes(b.endTime));
+  const components = [];
+  sorted.forEach((task) => {
+    const start = timeToMinutes(task.startTime); const end = timeToMinutes(task.endTime);
+    const component = components.find((group) => group.maxEnd > start);
+    if (component) { component.items.push({ task, start, end }); component.maxEnd = Math.max(component.maxEnd, end); }
+    else components.push({ items: [{ task, start, end }], maxEnd: end });
+  });
+  return components.flatMap((component) => {
+    const lanes = [];
+    const placed = component.items.map((item) => {
+      let lane = lanes.findIndex((lastEnd) => item.start >= lastEnd);
+      if (lane < 0) { lane = lanes.length; lanes.push(item.end); } else lanes[lane] = item.end;
+      return { ...item, lane };
+    });
+    const laneCount = Math.max(1, lanes.length);
+    return placed.map((item) => ({ ...item, laneCount }));
+  });
 }
 function calendarBlockStyle(start, end) { const top = Math.max(0, (start - CALENDAR_START) / 5 * CALENDAR_SLOT_HEIGHT); const height = Math.max(25, (end - start) / 5 * CALENDAR_SLOT_HEIGHT); return `top:${top}px;height:${height}px;`; }
+function calendarTaskWindow(task) { const start = timeToMinutes(task.startTime); const rawEnd = timeToMinutes(task.endTime); if (start == null) return null; const end = rawEnd == null ? Math.min(CALENDAR_END, start + Math.max(30, Number(task.estimateHours || 0.5) * 60)) : Math.max(start + 5, rawEnd); return { start, end }; }
 function renderCalendarDay(date) {
-  const { courses, tasks } = calendarItemsForDate(date); const laidOut = layoutCalendarTasks(tasks); const backgrounds = courses.map((course) => `<div class="calendar-background-item ${course.kind === "event" ? "event-background" : ""}" ${course.kind === "event" ? `data-open-event="${course.id}"` : ""} style="${calendarBlockStyle(timeToMinutes(course.start), timeToMinutes(course.end))};--event-color:${course.color || "#E8DCD1"}"><strong>${escapeHtml(course.name || course.title)}</strong><span>${course.start}—${course.end}</span></div>`).join(""); const foreground = laidOut.map(({ task, start, end, lane, laneCount }) => { const owner = task.parentId || task.id; const width = 100 / laneCount; return `<article class="calendar-task-item ${laneCount > 1 ? "overlapping" : ""} ${task.difficulty === "hard" ? "hard" : ""}" draggable="true" data-calendar-id="${task.id}" data-calendar-parent="${task.parentId || ""}" data-open-task="${owner}" style="${calendarBlockStyle(start, end)}left:${lane * width}%;width:${width}%;--task-color:${taskColor(task)}"><span class="calendar-task-title">${escapeHtml(task.title)}</span><span class="calendar-task-time">${task.startTime}—${task.endTime}</span></article>`; }).join(""); return `<div class="week-day-column"><div class="week-day-header"><strong>${DAY_NAMES[parseDate(date).getDay()]}</strong><span>${formatShortDate(date)} · ${dailyProgress(date) == null ? "N/A" : `${dailyProgress(date)}%`}</span></div><div class="week-grid" data-week-date="${date}">${backgrounds}${foreground}</div></div>`;
+  const targetDate = dateKey(date); const { courses, tasks } = calendarItemsForDate(targetDate); const timedTasks = tasks.map((task) => { const window = calendarTaskWindow(task); return window ? { ...task, startTime: minutesToTime(window.start), endTime: minutesToTime(window.end) } : null; }).filter(Boolean); const unscheduled = tasks.filter((task) => !calendarTaskWindow(task)); const laidOut = layoutCalendarTasks(timedTasks); const backgrounds = courses.map((course) => `<div class="calendar-background-item ${course.kind === "event" ? "event-background" : ""}" ${course.kind === "event" ? `data-open-event="${course.id}"` : ""} style="${calendarBlockStyle(timeToMinutes(course.start), timeToMinutes(course.end))};--event-color:${course.color || "#E8DCD1"}"><strong>${escapeHtml(course.name || course.title)}</strong><span>${course.start}—${course.end}</span></div>`).join(""); const foreground = laidOut.map(({ task, start, end, lane, laneCount }) => { const owner = task.parentId || task.id; const width = 100 / laneCount; return `<article class="calendar-task-item ${laneCount > 1 ? "overlapping" : ""} ${task.difficulty === "hard" ? "hard" : ""}" draggable="true" data-calendar-id="${task.id}" data-calendar-parent="${task.parentId || ""}" data-open-task="${owner}" style="${calendarBlockStyle(start, end)}left:${lane * width}%;width:${width}%;--task-color:${taskColor(task)}"><span class="calendar-task-title">${escapeHtml(task.title)}</span><span class="calendar-task-time">${task.startTime}—${task.endTime}</span><span class="calendar-task-progress">${energyMarkup(taskProgress(task))}</span></article>`; }).join(""); const unscheduledMarkup = unscheduled.length ? `<div class="week-unscheduled">${unscheduled.map((task) => `<button type="button" class="calendar-unscheduled-task" data-open-task="${task.parentId || task.id}" style="--task-color:${taskColor(task)}"><span class="task-color-dot"></span><span class="calendar-unscheduled-title">${escapeHtml(task.title)}</span><small>Planned</small></button>`).join("")}</div>` : ""; return `<div class="week-day-column"><div class="week-day-header"><strong>${DAY_NAMES[parseDate(targetDate).getDay()]}</strong><span>${formatShortDate(targetDate)} · ${dailyProgress(targetDate) == null ? "N/A" : `${dailyProgress(targetDate)}%`}</span></div>${unscheduledMarkup}<div class="week-grid" data-week-date="${targetDate}">${backgrounds}${foreground}</div></div>`;
 }
 function renderWeekView() {
   const days = weekDatesFor(selectedDate); const labels = Array.from({ length: 15 }, (_, index) => `${String(8 + index).padStart(2, "0")}:00`);
@@ -493,12 +542,39 @@ function renderWeekView() {
 }
 function bindWeekView() {
   $("#weekPrev")?.addEventListener("click", () => { selectedDate = addDays(selectedDate, -7); render(); }); $("#weekNext")?.addEventListener("click", () => { selectedDate = addDays(selectedDate, 7); render(); }); $("#weekToday")?.addEventListener("click", () => { selectedDate = todayIso(); render(); });
+  $$(`[data-open-task]`).filter((element) => element.classList.contains("calendar-unscheduled-task")).forEach((button) => button.addEventListener("click", () => openTaskDetail(button.dataset.openTask, true)));
+  const moveCalendarTask = (payload, grid, clientY) => {
+    const source = boardItems().find((item) => item.id === payload.id && (item.parentId || "") === (payload.parentId || ""));
+    if (!source || !grid) return;
+    const duration = Math.max(5, (timeToMinutes(source.endTime) || timeToMinutes(source.startTime) + 30) - (timeToMinutes(source.startTime) || CALENDAR_START));
+    const rect = grid.getBoundingClientRect(); const scrollTop = grid.parentElement?.scrollTop || 0;
+    const minute = snapToFive(CALENDAR_START + ((clientY - rect.top + scrollTop) / CALENDAR_SLOT_HEIGHT) * 5);
+    const start = Math.max(CALENDAR_START, Math.min(CALENDAR_END - duration, minute)); const end = start + duration;
+    if (updateScheduledDate(source, grid.dataset.weekDate, minutesToTime(start), minutesToTime(end))) { saveState(); selectedDate = grid.dataset.weekDate; render(); toast(`Moved to ${minutesToTime(start)}.`); }
+  };
   $$(`[data-calendar-id]`).forEach((block) => {
     block.addEventListener("dragstart", (event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", JSON.stringify({ id: block.dataset.calendarId, parentId: block.dataset.calendarParent })); });
     block.addEventListener("click", () => openTaskDetail(block.dataset.openTask, true));
+    let holdTimer = null; let touchDrag = false; let touchPayload = null;
+    block.addEventListener("pointerdown", (event) => {
+      if (event.pointerType === "mouse") return;
+      touchPayload = { id: block.dataset.calendarId, parentId: block.dataset.calendarParent };
+      touchDrag = false;
+      holdTimer = window.setTimeout(() => { touchDrag = true; block.classList.add("touch-dragging"); block.setPointerCapture?.(event.pointerId); }, 360);
+    }, { passive: true });
+    block.addEventListener("pointermove", (event) => {
+      if (!touchDrag) { if (Math.abs(event.movementY || 0) > 8) window.clearTimeout(holdTimer); return; }
+      event.preventDefault();
+    }, { passive: false });
+    block.addEventListener("pointerup", (event) => {
+      window.clearTimeout(holdTimer);
+      if (touchDrag) { event.preventDefault(); const grid = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-week-date]") || block.closest("[data-week-date]"); moveCalendarTask(touchPayload, grid, event.clientY); }
+      block.classList.remove("touch-dragging"); touchDrag = false; touchPayload = null;
+    }, { passive: false });
+    block.addEventListener("pointercancel", () => { window.clearTimeout(holdTimer); block.classList.remove("touch-dragging"); touchDrag = false; touchPayload = null; });
   });
   $$(`[data-week-date]`).forEach((grid) => grid.addEventListener("dragover", (event) => event.preventDefault()));
-  $$(`[data-week-date]`).forEach((grid) => grid.addEventListener("drop", (event) => { event.preventDefault(); try { const payload = JSON.parse(event.dataTransfer.getData("text/plain")); const source = boardItems().find((item) => item.id === payload.id && (item.parentId || "") === (payload.parentId || "")); if (!source) return; const duration = Math.max(5, (timeToMinutes(source.endTime) || timeToMinutes(source.startTime) + 30) - (timeToMinutes(source.startTime) || CALENDAR_START)); const rect = grid.getBoundingClientRect(); const scrollTop = grid.parentElement?.scrollTop || 0; const minute = snapToFive(CALENDAR_START + ((event.clientY - rect.top + scrollTop) / CALENDAR_SLOT_HEIGHT) * 5); const start = Math.max(CALENDAR_START, Math.min(CALENDAR_END - duration, minute)); const end = start + duration; if (updateScheduledDate(source, grid.dataset.weekDate, minutesToTime(start), minutesToTime(end))) { saveState(); selectedDate = grid.dataset.weekDate; render(); toast(`Moved to ${minutesToTime(start)}.`); } } catch (error) { console.warn("Calendar drop ignored", error); } }));
+  $$(`[data-week-date]`).forEach((grid) => grid.addEventListener("drop", (event) => { event.preventDefault(); try { moveCalendarTask(JSON.parse(event.dataTransfer.getData("text/plain")), grid, event.clientY); } catch (error) { console.warn("Calendar drop ignored", error); } }));
 }
 function bindEventButtons() { $$('[data-open-event]').forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); openEventDetail(button.dataset.openEvent); })); }
 
@@ -526,7 +602,7 @@ function currentHabitStats() {
 }
 function habitStreak(habit) { const dates = new Set(habit.checkins || []); let cursor = parseDate(todayIso()); let streak = 0; while (dates.has(isoDate(cursor))) { streak += 1; cursor.setDate(cursor.getDate() - 1); } return streak; }
 function habitHeatmapMarkup(habit) { const end = parseDate(selectedDate); const endDay = end.getDay() || 7; end.setDate(end.getDate() + (7 - endDay)); const start = new Date(end); start.setDate(end.getDate() - 83); const checked = new Set(habit.checkins || []); const cells = Array.from({ length: 84 }, (_, index) => { const date = new Date(start); date.setDate(start.getDate() + index); const iso = isoDate(date); return `<span class="habit-heat-cell ${checked.has(iso) ? "checked" : ""} ${iso === todayIso() ? "today" : ""}" title="${iso} · ${checked.has(iso) ? "checked" : "not checked"}"></span>`; }).join(""); return `<div class="habit-heatmap"><div class="detail-label">Check-in history · last 12 weeks</div><div class="habit-heatmap-caption">Only the day you check in is recorded. Past days cannot be filled retroactively.</div><div class="habit-heatmap-grid">${cells}</div></div>`; }
-function renderHabitsView() { const today = todayIso(); return `<div class="section-heading habit-heading"><div><div class="section-kicker">HABIT BOARD</div><h2>Habits</h2></div><button class="icon-button add-icon-button" id="newHabitButton" aria-label="Add habit">+</button></div><div class="task-list">${currentHabitStats().map(({ habit, count, frequency }) => { const checkedToday = (habit.checkins || []).includes(today); return `<article class="task-card habit-card ${checkedToday ? "checked-today" : ""}" data-open-habit="${habit.id}"><div class="habit-card-main"><div><div class="task-card-title">${escapeHtml(habit.name)}</div><div class="task-card-meta">${frequency === "weekly" ? "This week" : "This month"} KPI · ${habit.kpi} times</div></div><div class="habit-count-box" aria-label="${count} of ${habit.kpi} completed">${count}/${habit.kpi}</div></div><div class="habit-card-actions"><button class="habit-check-button" data-check-habit="${habit.id}" ${checkedToday ? "disabled" : ""} aria-label="${checkedToday ? "Checked today" : "Check in today"}">${checkedToday ? "✓" : "✓"}</button><button class="habit-edit-button" data-open-habit="${habit.id}" aria-label="Edit habit">Edit</button></div></article>`; }).join("")}</div>`; }
+function renderHabitsView() { const today = todayIso(); return `<div class="section-heading habit-heading"><div><div class="section-kicker">HABIT BOARD</div><h2>Habits</h2></div><button class="icon-button add-icon-button" id="newHabitButton" aria-label="Add habit">+</button></div><div class="task-list">${currentHabitStats().map(({ habit, count, frequency }) => { const checkedToday = (habit.checkins || []).includes(today); return `<article class="task-card habit-card ${checkedToday ? "checked-today" : ""}" data-open-habit="${habit.id}"><div class="habit-card-main"><div><div class="task-card-title">${escapeHtml(habit.name)}</div><div class="task-card-meta">${frequency === "weekly" ? "This week" : "This month"} KPI · ${habit.kpi} times</div></div><div class="habit-count-box" aria-label="${count} of ${habit.kpi} completed">${count}/${habit.kpi}</div></div><div class="habit-card-actions"><button class="habit-check-button" data-check-habit="${habit.id}" aria-label="${checkedToday ? "Undo check-in today" : "Check in today"}">${checkedToday ? "↶" : "✓"}</button><button class="habit-edit-button" data-open-habit="${habit.id}" aria-label="Edit habit">Edit</button></div></article>`; }).join("")}</div>`; }
 function bindHabitButtons() { $$('[data-check-habit]').forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); checkHabit(button.dataset.checkHabit); })); $$('[data-open-habit]').forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); openHabitDetail(button.dataset.openHabit); })); $("#newHabitButton")?.addEventListener("click", () => openHabitDetail()); }
 let currentHabitId = null;
 function openHabitDetail(habitId = null) { const habit = state.habits.find((item) => item.id === habitId); currentHabitId = habit?.id || null; const draft = habit || { name: "", frequency: "weekly", kpi: 3, checkins: [] }; const frequency = draft.frequency || draft.cadence || "weekly"; const count = habit ? (currentHabitStats().find((item) => item.habit.id === habitId)?.count || 0) : 0; $("#habitDetailTitle").textContent = habit ? habit.name : "Add a habit"; $("#habitDetailContent").innerHTML = `<div class="detail-block"><div class="habit-form-grid"><label>Name<input id="editHabitName" value="${escapeHtml(draft.name)}" maxlength="60" placeholder="例如：锻炼、阅读" required /></label><label>Frequency<select id="editHabitFrequency"><option value="weekly" ${frequency === "weekly" ? "selected" : ""}>Weekly</option><option value="monthly" ${frequency === "monthly" ? "selected" : ""}>Monthly</option></select></label><label>KPI times<input id="editHabitKpi" type="number" min="1" max="31" step="1" value="${draft.kpi}" required /></label></div>${habit ? `<div class="detail-help">Current period: ${count} / ${habit.kpi}.</div>${habitHeatmapMarkup(habit)}` : `<div class="detail-help">Only the date you check in counts toward the selected weekly or monthly KPI.</div>`}</div>`; $("#deleteHabitButton").hidden = !habit; $("#habitDetailModal").showModal(); }
@@ -535,7 +611,7 @@ function deleteHabit() { if (!currentHabitId) return; const habit = state.habits
 
 function placeholderText(view) { return { "message-board": { title: "A message board for Xiao Yu.", body: "The assistant entry point is reserved for a later iteration. The current build keeps the task page as the home base." }, reading: { title: "Reading and writing, later.", body: "The content library will have its own data window after the daily management core is stable." }, archive: { title: "A quiet archive for rewards.", body: "Reward triggers and collection records are intentionally left as a future module." }, inspiration: { title: "A box for ideas.", body: "The inspiration box will share the same durable foundation when its content model is ready." } }[view] || { title: "Coming later.", body: "This space is reserved for the next iteration." }; }
 
-function courseOccurrencesForDate(date) { return state.courses.filter((course) => course.date === date); }
+function courseOccurrencesForDate(date) { const targetDate = dateKey(date); return state.courses.filter((course) => dateKey(course.date) === targetDate).map((course) => ({ ...course, date: targetDate, kind: "course" })); }
 function overlaps(startA, endA, startB, endB) { if (!startA || !endA || !startB || !endB) return false; return startA < endB && startB < endA; }
 
 function openTaskDetail(taskId, drawer = false) {
@@ -548,7 +624,7 @@ function openTaskDetail(taskId, drawer = false) {
   const progressEditor = isDerivedProgress
     ? `<div class="progress-editor"><div class="detail-label">Progress</div><div class="readonly-field progress-readonly" id="editProgressReadonly">${progress}%</div><div class="detail-help">Long-term progress is calculated from completed subtasks.</div></div>`
     : `<label class="progress-editor"><span>${task.type === "regular" && task.children?.length ? "Parent progress override" : "Progress"}</span><div class="progress-input-row"><input id="editProgressRange" type="range" min="0" max="100" step="5" value="${progress}" aria-label="Progress slider" /><input id="editProgress" type="number" min="0" max="100" step="5" inputmode="numeric" value="${progress}" aria-label="Progress percentage" /><span>%</span></div>${task.type === "regular" && task.children?.length ? `<div class="detail-help">Set the parent percentage directly, or match the completed-child percentage to return to automatic calculation.</div>` : ""}</label>`;
-  $("#detailContent").innerHTML = `<div class="detail-block"><div class="form-grid"><label>Title<input id="editTitle" value="${escapeHtml(task.title)}" maxlength="120" /></label><label>Type<div class="readonly-field">${TYPE_LABEL[task.type]}</div></label><label>Planned date<input id="editScheduledDate" type="date" value="${task.scheduledDate || selectedDate}" /></label><label>Deadline<input id="editDeadline" type="date" value="${task.deadline || ""}" /></label><label>Estimated hours<input id="editEstimateHours" type="number" min="0.25" step="0.25" value="${task.estimateHours || 1}" /></label><label>Difficulty<select id="editDifficulty"><option value="simple" ${task.difficulty === "simple" ? "selected" : ""}>Simple</option><option value="normal" ${task.difficulty === "normal" ? "selected" : ""}>Normal</option><option value="hard" ${task.difficulty === "hard" ? "selected" : ""}>Hard</option></select></label><label>Task color<select id="editTagColor">${tagColorOptions(taskColor(task))}</select></label><label>Start time<input id="editStartTime" type="time" value="${task.startTime || ""}" /></label><label>End time<input id="editEndTime" type="time" value="${task.endTime || ""}" /></label></div><label>Notes<textarea id="editNotes" rows="3">${escapeHtml(task.notes || "")}</textarea></label>${progressEditor}<div class="detail-progress" id="detailProgressPreview">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div></div>${childBlock}<div class="detail-actions"><button type="button" data-set-progress="${task.id}" data-progress="0">0%</button><button type="button" data-set-progress="${task.id}" data-progress="50">50%</button><button type="button" data-set-progress="${task.id}" data-progress="100">100%</button><button type="button" data-detail-timer="${task.id}" class="timer-button ${task.timerStartedAt ? "running" : ""}">${timerLabel(task)}</button></div>`;
+  $("#detailContent").innerHTML = `<div class="detail-block"><div class="form-grid"><label>Title<input id="editTitle" value="${escapeHtml(task.title)}" maxlength="120" /></label><label>Type<div class="readonly-field">${TYPE_LABEL[task.type]}</div></label><label>Planned date<input id="editScheduledDate" type="date" value="${task.scheduledDate || selectedDate}" /></label><label>Deadline<input id="editDeadline" type="date" value="${task.deadline || ""}" /></label><label>Estimated hours<input id="editEstimateHours" type="number" min="0.25" step="0.25" value="${task.estimateHours || 1}" /></label><label>Difficulty<select id="editDifficulty"><option value="simple" ${task.difficulty === "simple" ? "selected" : ""}>Simple</option><option value="normal" ${task.difficulty === "normal" ? "selected" : ""}>Normal</option><option value="hard" ${task.difficulty === "hard" ? "selected" : ""}>Hard</option></select></label><label>Task color<select id="editTagColor">${tagColorOptions(taskColor(task))}</select></label><label>Start time<input id="editStartTime" type="time" value="${task.startTime || ""}" /></label><label>End time<input id="editEndTime" type="time" value="${task.endTime || ""}" /></label></div><label>Notes<textarea id="editNotes" rows="3">${escapeHtml(task.notes || "")}</textarea></label>${progressEditor}<div class="detail-progress" id="detailProgressPreview">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div></div>${childBlock}<div class="detail-actions"><button type="button" data-set-progress="${task.id}" data-progress="0">0%</button><button type="button" data-set-progress="${task.id}" data-progress="50">50%</button><button type="button" data-set-progress="${task.id}" data-progress="100">100%</button><button type="button" data-open-timer="${task.id}" class="timer-button detail-timer-button" aria-label="Open Pomodoro timer">${playIcon()}<span>Focus</span></button></div>`;
   $("#confirmCompleteButton").style.display = progress >= 100 && task.status !== "done" ? "inline-block" : "none";
   $("#confirmCompleteButton").dataset.completeTask = task.id;
   $("#taskDetailModal").classList.toggle("drawer-mode", drawer);
@@ -557,7 +633,7 @@ function openTaskDetail(taskId, drawer = false) {
   $$(`[data-confirm-child]`).forEach((button) => button.addEventListener("click", () => confirmChild(task.id, Number(button.dataset.confirmChild))));
   $$(`[data-remove-child]`).forEach((button) => button.addEventListener("click", () => removeSubtask(task.id, Number(button.dataset.removeChild))));
   $$(`[data-set-progress]`).forEach((button) => button.addEventListener("click", () => setTaskProgress(button.dataset.setProgress, Number(button.dataset.progress))));
-  $$(`[data-detail-timer]`).forEach((button) => button.addEventListener("click", () => toggleTimer(button.dataset.detailTimer)));
+  $$(`[data-open-timer]`).forEach((button) => button.addEventListener("click", () => openPomodoro(button.dataset.openTimer)));
   const progressRange = $("#editProgressRange");
   const progressNumber = $("#editProgress");
   const updateProgressPreview = (value) => {
@@ -677,30 +753,57 @@ async function setTaskProgress(taskId, progress) {
   const result = await cloudSave;
   if (!result?.ok && result?.reason === "cloud-error") toast(`Progress saved locally; cloud sync failed: ${result.message || "check your connection"}.`);
 }
-function trackedSeconds(task) { return Math.max(0, Number(task.actualSeconds || (Number(task.actualMinutes || 0) * 60)) + (task.timerStartedAt ? Math.floor((Date.now() - task.timerStartedAt) / 1000) : 0)); }
+function trackedSeconds(task) { return Math.max(0, Number(task.actualSeconds || (Number(task.actualMinutes || 0) * 60))); }
 function trackedMinutes(task) { return Math.floor(trackedSeconds(task) / 60); }
-function elapsedLabel(task) { const seconds = trackedSeconds(task); return `${String(Math.floor(seconds / 3600)).padStart(2, "0")}h ${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}m ${String(seconds % 60).padStart(2, "0")}s`; }
-function timerLabel(task) { return task.timerStartedAt ? `Running · ${elapsedLabel(task)}` : "Start timer"; }
-async function toggleTimer(taskId) {
-  const task = state.tasks.find((item) => item.id === taskId);
-  if (!task) return;
-  const wasRunning = Boolean(task.timerStartedAt);
-  if (wasRunning) {
-    task.actualSeconds = trackedSeconds(task);
-    task.actualMinutes = Math.floor(task.actualSeconds / 60);
-    delete task.timerStartedAt;
-  } else {
-    task.actualSeconds = Number(task.actualSeconds || (Number(task.actualMinutes || 0) * 60));
-    task.timerStartedAt = Date.now();
-    task.status = task.status === "not_started" ? "in_progress" : task.status;
-  }
-  const cloudSave = saveState({ immediate: true });
-  render();
-  toast(wasRunning ? `Timer paused · ${task.actualMinutes || 0} min tracked.` : "Timer started · the counter is running.");
-  const result = await cloudSave;
-  if (!result?.ok && result?.reason === "cloud-error") toast(`Timer saved locally; cloud sync failed: ${result.message || "check your connection"}.`);
+function pomodoroElapsed() { if (!activePomodoro) return 0; return Math.max(0, Math.floor(activePomodoro.elapsedSeconds + (activePomodoro.running ? (Date.now() - activePomodoro.startedAt) / 1000 : 0))); }
+function pomodoroClock(seconds) { const value = Math.max(0, Math.round(seconds)); return `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`; }
+function renderPomodoro() {
+  if (!activePomodoro) return;
+  const task = state.tasks.find((item) => item.id === activePomodoro.taskId); if (!task) return;
+  const elapsed = pomodoroElapsed(); const remaining = Math.max(0, activePomodoro.targetSeconds - elapsed);
+  $("#pomodoroTaskTitle").textContent = task.title;
+  $("#pomodoroTaskEstimate").textContent = `${task.estimateHours || 0}h estimated · ${trackedMinutes(task)} min focused before this session`;
+  $("#pomodoroClock").textContent = pomodoroClock(remaining);
+  $("#pomodoroClock").classList.toggle("is-running", activePomodoro.running);
+  $("#pomodoroState").textContent = activePomodoro.running ? "Running" : elapsed ? "Paused" : "Ready";
+  $("#pomodoroStartButton").disabled = activePomodoro.running;
+  $("#pomodoroPauseButton").disabled = !activePomodoro.running;
+  if (remaining === 0 && activePomodoro.running) { activePomodoro.elapsedSeconds = activePomodoro.targetSeconds; activePomodoro.running = false; $("#pomodoroState").textContent = "Session complete"; toast("Pomodoro session complete. You can record it now."); }
 }
-function checkHabit(habitId) { const habit = state.habits.find((item) => item.id === habitId); if (!habit) return; habit.checkins ||= []; const today = todayIso(); if (habit.checkins.includes(today)) return; habit.checkins.push(today); saveState(); render(); toast(`${habit.name} checked in for today.`); }
+function openPomodoro(taskId) { const task = state.tasks.find((item) => item.id === taskId); if (!task) return; activePomodoro = { taskId, elapsedSeconds: 0, startedAt: 0, running: false, targetSeconds: 25 * 60 }; renderPomodoro(); $("#pomodoroModal").showModal(); }
+function startPomodoro() { if (!activePomodoro || activePomodoro.running) return; activePomodoro.startedAt = Date.now(); activePomodoro.running = true; renderPomodoro(); }
+function pausePomodoro() { if (!activePomodoro || !activePomodoro.running) return; activePomodoro.elapsedSeconds = pomodoroElapsed(); activePomodoro.running = false; activePomodoro.startedAt = 0; renderPomodoro(); }
+async function endPomodoro() {
+  if (!activePomodoro) return;
+  pausePomodoro();
+  const sessionSeconds = Math.max(0, Math.round(activePomodoro.elapsedSeconds)); const taskId = activePomodoro.taskId;
+  if (!sessionSeconds) { toast("Start the Pomodoro before recording focus time."); return; }
+  const task = state.tasks.find((item) => item.id === taskId); if (!task) return;
+  task.actualSeconds = trackedSeconds(task) + sessionSeconds; task.actualMinutes = Math.floor(task.actualSeconds / 60);
+  const suggestedProgress = Math.min(100, Math.max(taskProgress(task), Math.round(taskProgress(task) + sessionSeconds / (Math.max(.25, Number(task.estimateHours) || 1) * 3600) * 100)));
+  pendingTimerSync = { taskId, suggestedProgress, sessionSeconds };
+  activePomodoro = null; $("#pomodoroModal").close();
+  const cloudSave = saveState({ immediate: true }); render();
+  const result = await cloudSave;
+  if (result?.ok) toast(`Focus recorded · ${Math.floor(sessionSeconds / 60)} min.`);
+  else if (result?.reason === "not-connected") toast("Focus recorded locally. Connect cloud sync to share it.");
+  else toast("Focus recorded locally; cloud sync is still pending.");
+  const latestTask = state.tasks.find((item) => item.id === taskId); if (!latestTask || latestTask.status === "done") { pendingTimerSync = null; return; }
+  $("#timerSyncMessage").textContent = `本次专注 ${Math.floor(sessionSeconds / 60)} 分钟。是否把任务进度更新到 ${suggestedProgress}%？`;
+  $("#timerSyncModal").showModal();
+}
+function syncTimerProgress(shouldSync) {
+  if (!pendingTimerSync) return;
+  const pending = pendingTimerSync; pendingTimerSync = null; $("#timerSyncModal").close();
+  if (!shouldSync) { toast("Focus recorded. Task progress left unchanged."); return; }
+  const task = state.tasks.find((item) => item.id === pending.taskId); if (!task) return;
+  if (task.type === "regular" && task.children?.length) task.progressOverride = pending.suggestedProgress;
+  task.progress = pending.suggestedProgress; task.status = pending.suggestedProgress >= 100 ? "pending_confirmation" : pending.suggestedProgress > 0 ? "in_progress" : "not_started";
+  const cloudSave = saveState({ immediate: true }); render();
+  if (pending.suggestedProgress >= 100) openCompletionPrompt(task.id);
+  cloudSave.then((result) => { if (result?.ok) toast("Task progress updated and synced."); else toast("Task progress updated locally; cloud sync is pending."); });
+}
+function checkHabit(habitId) { const habit = state.habits.find((item) => item.id === habitId); if (!habit) return; habit.checkins ||= []; const today = todayIso(); const index = habit.checkins.indexOf(today); if (index >= 0) { habit.checkins.splice(index, 1); saveState(); render(); toast(`${habit.name} check-in undone.`); return; } habit.checkins.push(today); saveState(); render(); toast(`${habit.name} checked in for today.`); }
 
 function openTaskModal() { const form = $("#taskForm"); form.reset(); form.elements.scheduledDate.value = selectedDate; $("#taskModal").showModal(); }
 function createTask(event) { event.preventDefault(); const form = event.currentTarget; if (event.submitter?.value === "cancel") { form.reset(); $("#taskModal").close(); return; } const data = new FormData(form); const type = data.get("type"); const task = { id: uid("task"), type, title: data.get("title").trim(), notes: data.get("notes").trim(), scheduledDate: data.get("scheduledDate"), deadline: data.get("deadline"), estimateHours: Number(data.get("estimateHours")), difficulty: data.get("difficulty"), progress: 0, status: "not_started", actualMinutes: 0, startTime: data.get("startTime"), endTime: data.get("endTime"), children: [], tagColor: data.get("tagColor") || DEFAULT_TAG_COLOR[type], createdAt: new Date().toISOString() }; state.tasks.push(task); saveState(); form.reset(); $("#taskModal").close(); selectedDate = task.scheduledDate; currentTab = "today"; render(); toast("Task created."); }
@@ -780,6 +883,13 @@ $("#courseFileInput").addEventListener("change", (event) => { if (event.target.f
 $("#confirmImportButton").addEventListener("click", (event) => { event.preventDefault(); commitCourseImport(); });
 $("#saveTaskButton").addEventListener("click", saveTaskChanges);
 $("#taskDetailModal").addEventListener("close", () => { $("#taskDetailModal").classList.remove("drawer-mode"); });
+$("#pomodoroStartButton").addEventListener("click", startPomodoro);
+$("#pomodoroPauseButton").addEventListener("click", pausePomodoro);
+$("#pomodoroEndButton").addEventListener("click", endPomodoro);
+$("#pomodoroModal").addEventListener("close", () => { activePomodoro = null; });
+$("#timerSyncYesButton").addEventListener("click", () => syncTimerProgress(true));
+$("#timerSyncNoButton").addEventListener("click", () => syncTimerProgress(false));
+$("#timerSyncModal").addEventListener("close", () => { pendingTimerSync = null; });
 $("#confirmCompletionButton").addEventListener("click", (event) => { event.preventDefault(); applyPendingCompletion(); });
 $("#completionModal").addEventListener("close", () => { if ($("#completionModal").returnValue === "cancel") pendingCompletion = null; });
 $("#saveHabitButton").addEventListener("click", (event) => { event.preventDefault(); saveHabitChanges(); });
@@ -810,19 +920,6 @@ window.addEventListener("online", async () => { if (cloudSession) await hydrateS
 function closeSidebar() { $("#sidebar").classList.remove("open"); $("#scrim").classList.remove("open"); }
 function resetPageScroll() { window.scrollTo({ top: 0, left: 0, behavior: "auto" }); document.documentElement.scrollTop = 0; document.body.scrollTop = 0; $(".main-column")?.scrollTo({ top: 0, left: 0, behavior: "auto" }); }
 
-function refreshRunningTimers() {
-  if (!state.tasks.some((task) => task.timerStartedAt)) return;
-  $$(`[data-start-task], [data-detail-timer]`).forEach((button) => {
-    const task = state.tasks.find((item) => item.id === button.dataset.startTask || item.id === button.dataset.detailTimer);
-    if (!task) return;
-    button.classList.toggle("running", Boolean(task.timerStartedAt));
-    button.textContent = timerLabel(task);
-  });
-  $$(`[data-timer-minutes]`).forEach((element) => {
-    const task = state.tasks.find((item) => item.id === element.dataset.timerMinutes);
-    if (task) element.textContent = `${trackedMinutes(task)} min tracked`;
-  });
-}
-window.setInterval(refreshRunningTimers, 1000);
+window.setInterval(() => { if (activePomodoro?.running) renderPomodoro(); }, 1000);
 render();
 initCloudSync();

@@ -231,6 +231,23 @@
       </form>
     </dialog>
 
+    <dialog class="modal pomodoro-modal" id="pomodoroModal">
+      <form method="dialog" id="pomodoroForm">
+        <div class="modal-header"><div><div class="section-kicker">POMODORO FOCUS</div><h2 id="pomodoroTaskTitle">Task</h2><p class="detail-help" id="pomodoroTaskEstimate">25-minute focus session</p></div><button class="icon-button" value="cancel" formnovalidate aria-label="关闭">×</button></div>
+        <div class="pomodoro-clock-wrap"><div class="pomodoro-clock" id="pomodoroClock">25:00</div><div class="pomodoro-state" id="pomodoroState">Ready</div></div>
+        <div class="pomodoro-actions"><button class="secondary-button" id="pomodoroStartButton" type="button">开始</button><button class="secondary-button" id="pomodoroPauseButton" type="button" disabled>暂停</button><button class="primary-button" id="pomodoroEndButton" type="button">结束并记录</button></div>
+        <p class="pomodoro-help">计时只在弹窗内运行；关闭弹窗不会写入任务，只有“结束并记录”才会保存实际专注时长。</p>
+      </form>
+    </dialog>
+
+    <dialog class="modal completion-modal" id="timerSyncModal">
+      <form method="dialog" id="timerSyncForm">
+        <div class="modal-header"><div><div class="section-kicker">FOCUS RECORDED</div><h2>Update task progress?</h2></div><button class="icon-button" value="cancel" formnovalidate aria-label="关闭">×</button></div>
+        <p id="timerSyncMessage" class="completion-message">是否同步更新任务进度条？</p>
+        <div class="modal-actions"><button class="secondary-button" id="timerSyncNoButton" type="button">Keep current progress</button><button class="primary-button" id="timerSyncYesButton" type="button">Update progress</button></div>
+      </form>
+    </dialog>
+
     <dialog class="modal habit-detail-modal" id="habitDetailModal">
       <form method="dialog" id="habitDetailForm">
         <div class="modal-header"><div><div class="section-kicker">HABIT DETAIL</div><h2 id="habitDetailTitle">Habit</h2></div><button class="icon-button" value="cancel" formnovalidate aria-label="关闭">×</button></div>
