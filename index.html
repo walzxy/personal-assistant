@@ -44,7 +44,8 @@
         </nav>
 
         <div class="sidebar-footer">
-          <div class="storage-status"><span class="status-dot"></span> Local workspace</div>
+          <div class="storage-status" id="syncStatus"><span class="status-dot"></span> Local workspace</div>
+          <button class="text-button" id="cloudLoginButton">Connect cloud sync</button>
           <button class="text-button" id="exportData">Export data</button>
         </div>
       </aside>
@@ -229,7 +230,18 @@
       </form>
     </dialog>
 
+    <dialog class="modal" id="authModal">
+      <form method="dialog" id="authForm">
+        <div class="modal-header"><div><div class="section-kicker">CLOUD SYNC</div><h2>Connect your workspace</h2></div><button class="icon-button" value="cancel" formnovalidate aria-label="关闭">×</button></div>
+        <p class="completion-message">Use your email to receive a one-time sign-in link. Your workspace stays protected by Supabase Auth and row-level permissions.</p>
+        <label>Email<input id="authEmail" type="email" autocomplete="email" required placeholder="you@example.com" /></label>
+        <p class="detail-help" id="authStatus">After signing in, this browser will sync with your private cloud workspace.</p>
+        <div class="modal-actions"><button class="secondary-button" value="cancel" formnovalidate>Close</button><button class="detail-inline-button danger-button" id="authSignOutButton" type="button" hidden>Sign out</button><button class="primary-button" id="authSubmitButton" type="submit">Send magic link</button></div>
+      </form>
+    </dialog>
+
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="app.js" type="module"></script>
   </body>
 </html>

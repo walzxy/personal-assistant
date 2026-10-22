@@ -1,6 +1,16 @@
 # Xiao Yu · Personal Daily Assistant
 
-这是个人日常管理小秘书的第一版前端原型。当前使用浏览器 `localStorage` 保存数据，适合先验证信息架构和交互；后续可以把同一套数据模型迁移到云端数据库，并接入 OpenClaw API。
+这是个人日常管理小秘书。网页默认使用本地缓存，同时支持通过 Supabase Auth 登录后同步到云端；这样在电脑和手机之间可以共享同一套数据。
+
+## 启用云端同步
+
+1. 在 Supabase Dashboard 的 SQL Editor 中执行项目里的 `supabase-schema.sql`；
+2. 在 Supabase 的 Authentication → URL Configuration 中，把当前 GitHub Pages 地址加入 Site URL 或 Redirect URLs：
+   `https://walzxy.github.io/personal-assistant/`；
+3. 打开网页，点击侧边栏的 `Connect cloud sync`，输入自己的邮箱并打开收到的 magic link；
+4. 登录成功后，数据会以本地优先、延迟写入的方式同步到 `workspace_state` 表。
+
+网页前端只使用 Publishable key；Secret key、service role key 和数据库密码不应放入仓库或网页。
 
 ## 本地运行
 
@@ -40,15 +50,13 @@ http://127.0.0.1:4173
 - 奖励抽奖和 Archive 数据逻辑；
 - 阅读清单和阅读笔记；
 - Xiao Yu 对话界面；
-- 云端账户、数据库和多设备同步；
+- OpenClaw 写入接口和细粒度实体表；当前先使用 `workspace_state` JSON 记录完成低风险迁移；
 - 独立课程推送提醒；
-- OpenClaw 写入接口。
 
 ## 后续维护顺序
 
-1. 将本地状态抽离为明确的数据层；
-2. 增加任务/课程/习惯的后端持久化接口；
-3. 接入数据备份和登录；
-4. 提供 OpenClaw 的只读日报接口；
-5. 再开放受权限控制的任务写入接口；
-6. 最后实现奖励、阅读、留言板和灵感箱。
+1. 将 `workspace_state` 迁移为任务、事件、课程、习惯等明确的数据表；
+2. 增加云端备份、冲突检测和离线同步队列；
+3. 接入 OpenClaw 的只读日报接口；
+4. 再开放受权限控制的任务写入接口；
+5. 最后实现奖励、阅读、留言板和灵感箱。

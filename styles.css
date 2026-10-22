@@ -40,6 +40,9 @@ button { cursor: pointer; }
 .sidebar-footer { margin-top: auto; padding: 22px 11px 0; display: grid; gap: 13px; }
 .storage-status { color: var(--muted); font-size: 12px; }
 .status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green); margin-right: 5px; }
+.status-dot.cloud { background: #6f8f72; }
+.status-dot.pending { background: #d9a05b; }
+.status-dot.error { background: #c08a8a; }
 .text-button { border: 0; background: transparent; color: var(--cold-deep); padding: 5px 0; text-align: left; font-weight: 600; font-size: 13px; }
 .text-button:hover { color: var(--ink); }
 .sidebar-close, .menu-trigger, .insight-close { display: none; }

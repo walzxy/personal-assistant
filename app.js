@@ -5,6 +5,9 @@ const TAG_COLORS = ["#8EA1B5", "#9CAF88", "#C08A8A", "#CDBBA0", "#A697B5", "#D9A
 const DEFAULT_TAG_COLOR = { regular: "#8EA1B5", standalone: "#D9A05B", "long-term": "#86A3A3", subtask: "#8EA1B5" };
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const DAY_NAMES_ZH = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+const SUPABASE_URL = "https://wqbrteepiwfzgznsuahs.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_c3IgjWyKNWBXI8Fa3XV7jA_0RdSj_1H";
+const CLOUD_SYNC_DELAY = 700;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -34,11 +37,27 @@ let currentView = "assignment";
 let pendingImport = null;
 let currentDetailTaskId = null;
 let pendingCompletion = null;
+let supabaseClient = null;
+let cloudSession = null;
+let cloudSyncTimer = null;
+let cloudSyncInFlight = false;
+let cloudSyncReady = false;
+
+function normalizeState(saved) {
+  return {
+    ...saved,
+    tasks: (saved.tasks || []).filter((task) => task.title),
+    courses: saved.courses || [],
+    events: saved.events || [],
+    habits: saved.habits || defaultHabits,
+    courseMeta: saved.courseMeta || null,
+  };
+}
 
 function loadState() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (saved) return { ...saved, tasks: (saved.tasks || []).filter((task) => task.title), courses: saved.courses || [], habits: saved.habits || defaultHabits };
+    if (saved) return normalizeState(saved);
   } catch (error) { console.warn("Could not load local data", error); }
   return {
     tasks: [
@@ -57,7 +76,96 @@ function loadState() {
   };
 }
 
-function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+function saveState() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  localStorage.setItem(`${STORAGE_KEY}:updatedAt`, new Date().toISOString());
+  queueCloudSync();
+}
+
+function setSyncStatus(message, tone = "local") {
+  const element = $("#syncStatus");
+  if (!element) return;
+  element.innerHTML = `<span class="status-dot ${tone}"></span> ${escapeHtml(message)}`;
+}
+
+function updateCloudControls() {
+  const button = $("#cloudLoginButton");
+  const signOut = $("#authSignOutButton");
+  const submit = $("#authSubmitButton");
+  if (!button) return;
+  if (cloudSession) {
+    button.textContent = "Cloud account connected";
+    if (signOut) signOut.hidden = false;
+    if (submit) submit.hidden = true;
+    setSyncStatus(cloudSyncReady ? "Cloud workspace synced" : "Cloud account connected", cloudSyncReady ? "cloud" : "pending");
+  } else {
+    button.textContent = "Connect cloud sync";
+    if (signOut) signOut.hidden = true;
+    if (submit) submit.hidden = false;
+    setSyncStatus("Local workspace", "local");
+  }
+}
+
+function queueCloudSync() {
+  if (!cloudSession || !supabaseClient || !cloudSyncReady) return;
+  clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = setTimeout(syncStateToCloud, CLOUD_SYNC_DELAY);
+}
+
+async function syncStateToCloud() {
+  if (!cloudSession || !supabaseClient || cloudSyncInFlight) return;
+  cloudSyncInFlight = true;
+  setSyncStatus("Saving to cloud…", "pending");
+  const { error } = await supabaseClient.from("workspace_state").upsert({ user_id: cloudSession.user.id, state, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+  cloudSyncInFlight = false;
+  if (error) {
+    console.error("Cloud save failed", error);
+    setSyncStatus("Cloud sync needs setup", "error");
+    return;
+  }
+  cloudSyncReady = true;
+  updateCloudControls();
+}
+
+async function hydrateStateFromCloud() {
+  if (!cloudSession || !supabaseClient) return;
+  cloudSyncReady = false;
+  setSyncStatus("Loading cloud workspace…", "pending");
+  const { data, error } = await supabaseClient.from("workspace_state").select("state, updated_at").eq("user_id", cloudSession.user.id).maybeSingle();
+  if (error) {
+    console.error("Cloud load failed", error);
+    setSyncStatus("Run the Supabase schema first", "error");
+    return;
+  }
+  if (data?.state && typeof data.state === "object") {
+    Object.assign(state, normalizeState(data.state));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    localStorage.setItem(`${STORAGE_KEY}:updatedAt`, data.updated_at || new Date().toISOString());
+    render();
+  } else {
+    cloudSyncReady = true;
+    await syncStateToCloud();
+  }
+  cloudSyncReady = true;
+  updateCloudControls();
+}
+
+async function initCloudSync() {
+  if (!window.supabase?.createClient) {
+    setSyncStatus("Local workspace", "local");
+    return;
+  }
+  supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+  const { data } = await supabaseClient.auth.getSession();
+  cloudSession = data.session;
+  updateCloudControls();
+  if (cloudSession) await hydrateStateFromCloud();
+  supabaseClient.auth.onAuthStateChange((event, session) => {
+    cloudSession = session;
+    updateCloudControls();
+    if (event === "SIGNED_IN") setTimeout(() => hydrateStateFromCloud(), 0);
+  });
+}
 function formatDate(value, options = { month: "long", day: "numeric", weekday: "long" }) { return new Intl.DateTimeFormat("zh-CN", options).format(parseDate(value)); }
 function formatEnglishDate(value, options = { month: "short", day: "numeric" }) { return new Intl.DateTimeFormat("en-US", options).format(parseDate(value)); }
 function formatShortDate(value) { return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" }).format(parseDate(value)); }
@@ -358,6 +466,36 @@ function exportData() { const blob = new Blob([JSON.stringify(state, null, 2)], 
 function escapeHtml(value = "") { return String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char])); }
 function toast(message) { const element = $("#toast"); element.textContent = message; element.classList.add("show"); clearTimeout(toast.timer); toast.timer = setTimeout(() => element.classList.remove("show"), 2500); }
 
+function openAuthModal() {
+  updateCloudControls();
+  $("#authEmail").value = cloudSession?.user?.email || "";
+  $("#authStatus").textContent = cloudSession ? `Connected as ${cloudSession.user.email || "your account"}.` : "After signing in, this browser will sync with your private cloud workspace.";
+  $("#authModal").showModal();
+}
+
+async function submitAuth(event) {
+  event.preventDefault();
+  if (cloudSession || !supabaseClient) return;
+  const email = $("#authEmail").value.trim();
+  if (!email) return;
+  const button = $("#authSubmitButton");
+  button.disabled = true;
+  $("#authStatus").textContent = "Sending your sign-in link…";
+  const { error } = await supabaseClient.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.href } });
+  button.disabled = false;
+  $("#authStatus").textContent = error ? `Could not send the link: ${error.message}` : "Check your email and open the sign-in link. This window can stay open.";
+}
+
+async function signOutCloud() {
+  if (!supabaseClient) return;
+  await supabaseClient.auth.signOut();
+  cloudSession = null;
+  cloudSyncReady = false;
+  $("#authModal").close();
+  updateCloudControls();
+  toast("Cloud sync disconnected. Local data remains on this device.");
+}
+
 $("#newTaskButton").addEventListener("click", openTaskModal);
 $("#newEventButton").addEventListener("click", () => openEventDetail());
 $("#taskForm").addEventListener("submit", createTask);
@@ -372,6 +510,9 @@ $("#confirmCompletionButton").addEventListener("click", (event) => { event.preve
 $("#completionModal").addEventListener("close", () => { if ($("#completionModal").returnValue === "cancel") pendingCompletion = null; });
 $("#saveHabitButton").addEventListener("click", (event) => { event.preventDefault(); saveHabitChanges(); });
 $("#deleteHabitButton").addEventListener("click", deleteHabit);
+$("#cloudLoginButton").addEventListener("click", openAuthModal);
+$("#authForm").addEventListener("submit", submitAuth);
+$("#authSignOutButton").addEventListener("click", signOutCloud);
 $("#confirmCompleteButton").addEventListener("click", (event) => { event.preventDefault(); const task = state.tasks.find((item) => item.id === event.currentTarget.dataset.completeTask); if (task) { task.status = "done"; task.progress = 100; saveState(); $("#taskDetailModal").close(); render(); toast("Task marked completed."); } });
 $("#previousDay").addEventListener("click", () => { const date = parseDate(selectedDate); date.setDate(date.getDate() - 1); selectedDate = isoDate(date); render(); });
 $("#nextDay").addEventListener("click", () => { const date = parseDate(selectedDate); date.setDate(date.getDate() + 1); selectedDate = isoDate(date); render(); });
@@ -389,3 +530,4 @@ function closeSidebar() { $("#sidebar").classList.remove("open"); $("#scrim").cl
 function resetPageScroll() { window.scrollTo({ top: 0, left: 0, behavior: "auto" }); document.documentElement.scrollTop = 0; document.body.scrollTop = 0; $(".main-column")?.scrollTo({ top: 0, left: 0, behavior: "auto" }); }
 
 render();
+initCloudSync();
