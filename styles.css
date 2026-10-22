@@ -214,5 +214,13 @@ h1, h2, h3, .date-label, .stat-value, .progress-number, .timeline-time, .calenda
 .habit-edit-button { border: 0; background: transparent; color: var(--cold-deep); font-size: 11px; font-weight: 700; padding: 5px 0; }
 .calendar-event.event { display: block; width: 100%; border: 0; border-left: 3px solid var(--warm-deep); text-align: left; cursor: pointer; }
 .danger-button { color: var(--red) !important; background: #f7e8e6 !important; }
+.progress-editor { display: grid; gap: 8px; }
+.progress-input-row { display: grid; grid-template-columns: minmax(0, 1fr) 76px auto; gap: 10px; align-items: center; }
+.progress-input-row input[type="range"] { width: 100%; accent-color: var(--cold-deep); min-height: 32px; }
+.progress-input-row input[type="number"] { min-width: 0; text-align: center; font-family: "Space Grotesk", Inter, system-ui, sans-serif; font-size: 16px; }
+.progress-input-row > span { color: var(--muted); font-family: "Space Grotesk", Inter, system-ui, sans-serif; }
+.progress-readonly { font-family: "Space Grotesk", Inter, system-ui, sans-serif; font-size: 16px; }
+#taskDetailModal { max-height: calc(100dvh - 24px); overflow: auto; }
+#taskDetailModal .modal-actions { position: sticky; bottom: -23px; background: rgba(255,255,255,.96); padding: 14px 0 0; }
 @media (max-width: 900px) { .kanban-column { flex-basis: calc(100vw - 88px); } }
-@media (max-width: 760px) { .sidebar { position: fixed; height: 100vh; overflow-y: auto; padding-top: 20px; }.sidebar-mobile-header { height: 18px; }.primary-nav { padding-top: 10px; }.habit-form-grid { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .sidebar { position: fixed; height: 100vh; overflow-y: auto; padding-top: 20px; }.sidebar-mobile-header { height: 18px; }.primary-nav { padding-top: 10px; }.habit-form-grid { grid-template-columns: 1fr; }.progress-input-row { grid-template-columns: minmax(0, 1fr) 68px auto; gap: 7px; }.progress-input-row input[type="range"] { min-height: 40px; }.progress-input-row input[type="number"] { padding: 12px 7px; }.subtask-row { grid-template-columns: minmax(0, 1fr) 86px; gap: 8px; padding: 5px 0; }.subtask-row input[data-child-field="title"] { grid-column: 1 / -1; }.subtask-row-actions { grid-column: 1 / -1; justify-content: flex-start; }.subtask-row input { min-height: 40px; }.detail-actions button, #saveTaskButton { min-height: 42px; }.modal-actions { flex-wrap: wrap; }.modal-actions > button { flex: 1 1 auto; min-height: 42px; } }

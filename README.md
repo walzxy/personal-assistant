@@ -7,7 +7,7 @@
 1. 在 Supabase Dashboard 的 SQL Editor 中执行项目里的 `supabase-schema.sql`；
 2. 在 Supabase 的 Authentication → URL Configuration 中，把当前 GitHub Pages 地址加入 Site URL 或 Redirect URLs：
    `https://walzxy.github.io/personal-assistant/`；
-3. 打开网页，点击侧边栏的 `Connect cloud sync`，输入自己的邮箱并打开收到的 magic link；
+3. 打开网页，点击侧边栏的 `Connect cloud sync`，可以使用 `Continue with GitHub`，也可以输入邮箱并打开收到的 magic link；
 4. 登录成功后，数据会以本地优先、延迟写入的方式同步到 `workspace_state` 表。
 
 网页前端只使用 Publishable key；Secret key、service role key 和数据库密码不应放入仓库或网页。
