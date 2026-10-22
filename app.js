@@ -92,17 +92,20 @@ function setSyncStatus(message, tone = "local") {
 function updateCloudControls() {
   const button = $("#cloudLoginButton");
   const signOut = $("#authSignOutButton");
+  const github = $("#authGithubButton");
   const submit = $("#authSubmitButton");
   if (!button) return;
   if (cloudSession) {
     button.textContent = "Cloud account connected";
     if (signOut) signOut.hidden = false;
+    if (github) github.hidden = true;
     if (submit) submit.hidden = true;
     if (submit) submit.disabled = false;
     setSyncStatus(cloudSyncReady ? "Cloud workspace synced" : "Cloud account connected", cloudSyncReady ? "cloud" : "pending");
   } else {
     button.textContent = "Connect cloud sync";
     if (signOut) signOut.hidden = true;
+    if (github) { github.hidden = false; github.disabled = !cloudClientReady; }
     if (submit) submit.hidden = false;
     if (submit) submit.disabled = !cloudClientReady;
     setSyncStatus("Local workspace", "local");
@@ -505,6 +508,21 @@ async function submitAuth(event) {
   $("#authStatus").textContent = error ? `Could not send the link: ${error.message}` : "Check your email and open the sign-in link. This window can stay open.";
 }
 
+async function signInWithGithub() {
+  if (!supabaseClient) {
+    $("#authStatus").textContent = "Cloud service is not ready. Please refresh the page and try again.";
+    return;
+  }
+  const button = $("#authGithubButton");
+  button.disabled = true;
+  $("#authStatus").textContent = "Opening GitHub sign-in…";
+  const { error } = await supabaseClient.auth.signInWithOAuth({ provider: "github", options: { redirectTo: window.location.href } });
+  if (error) {
+    button.disabled = false;
+    $("#authStatus").textContent = `Could not open GitHub sign-in: ${error.message}`;
+  }
+}
+
 async function signOutCloud() {
   if (!supabaseClient) return;
   await supabaseClient.auth.signOut();
@@ -531,6 +549,7 @@ $("#saveHabitButton").addEventListener("click", (event) => { event.preventDefaul
 $("#deleteHabitButton").addEventListener("click", deleteHabit);
 $("#cloudLoginButton").addEventListener("click", openAuthModal);
 $("#authForm").addEventListener("submit", submitAuth);
+$("#authGithubButton").addEventListener("click", signInWithGithub);
 $("#authSignOutButton").addEventListener("click", signOutCloud);
 $("#confirmCompleteButton").addEventListener("click", (event) => { event.preventDefault(); const task = state.tasks.find((item) => item.id === event.currentTarget.dataset.completeTask); if (task) { task.status = "done"; task.progress = 100; saveState(); $("#taskDetailModal").close(); render(); toast("Task marked completed."); } });
 $("#previousDay").addEventListener("click", () => { const date = parseDate(selectedDate); date.setDate(date.getDate() - 1); selectedDate = isoDate(date); render(); });
