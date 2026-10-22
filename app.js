@@ -42,6 +42,7 @@ let cloudSession = null;
 let cloudSyncTimer = null;
 let cloudSyncInFlight = false;
 let cloudSyncReady = false;
+let cloudClientReady = false;
 
 function normalizeState(saved) {
   return {
@@ -97,11 +98,13 @@ function updateCloudControls() {
     button.textContent = "Cloud account connected";
     if (signOut) signOut.hidden = false;
     if (submit) submit.hidden = true;
+    if (submit) submit.disabled = false;
     setSyncStatus(cloudSyncReady ? "Cloud workspace synced" : "Cloud account connected", cloudSyncReady ? "cloud" : "pending");
   } else {
     button.textContent = "Connect cloud sync";
     if (signOut) signOut.hidden = true;
     if (submit) submit.hidden = false;
+    if (submit) submit.disabled = !cloudClientReady;
     setSyncStatus("Local workspace", "local");
   }
 }
@@ -151,11 +154,23 @@ async function hydrateStateFromCloud() {
 }
 
 async function initCloudSync() {
+  setSyncStatus("Loading cloud sync…", "pending");
   if (!window.supabase?.createClient) {
-    setSyncStatus("Local workspace", "local");
+    await new Promise((resolve) => {
+      const fallback = document.createElement("script");
+      fallback.src = "https://unpkg.com/@supabase/supabase-js@2";
+      fallback.onload = resolve;
+      fallback.onerror = resolve;
+      document.head.appendChild(fallback);
+    });
+  }
+  if (!window.supabase?.createClient) {
+    setSyncStatus("Cloud client unavailable", "error");
+    updateCloudControls();
     return;
   }
   supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+  cloudClientReady = true;
   const { data } = await supabaseClient.auth.getSession();
   cloudSession = data.session;
   updateCloudControls();
@@ -469,13 +484,17 @@ function toast(message) { const element = $("#toast"); element.textContent = mes
 function openAuthModal() {
   updateCloudControls();
   $("#authEmail").value = cloudSession?.user?.email || "";
-  $("#authStatus").textContent = cloudSession ? `Connected as ${cloudSession.user.email || "your account"}.` : "After signing in, this browser will sync with your private cloud workspace.";
+  $("#authStatus").textContent = cloudSession ? `Connected as ${cloudSession.user.email || "your account"}.` : cloudClientReady ? "After signing in, this browser will sync with your private cloud workspace." : "Cloud service is still loading. Please wait a moment or refresh the page.";
   $("#authModal").showModal();
 }
 
 async function submitAuth(event) {
   event.preventDefault();
-  if (cloudSession || !supabaseClient) return;
+  if (cloudSession) return;
+  if (!supabaseClient) {
+    $("#authStatus").textContent = "Cloud service is not ready. Please refresh the page and try again.";
+    return;
+  }
   const email = $("#authEmail").value.trim();
   if (!email) return;
   const button = $("#authSubmitButton");
