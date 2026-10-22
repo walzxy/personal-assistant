@@ -55,16 +55,25 @@
           <div class="topbar-left">
             <button class="icon-button menu-trigger" id="menuTrigger" aria-label="打开菜单">☰</button>
             <div>
-              <div class="eyebrow">ASSIGNMENT AND GOAL</div>
               <h1 id="pageTitle">Assignment and goal</h1>
             </div>
           </div>
           <div class="topbar-actions">
-            <button class="secondary-button" id="importCourseButton">Import course JSON</button>
             <input id="courseFileInput" type="file" accept="application/json,.json" hidden />
-            <button class="secondary-button" id="newEventButton">+ New event</button>
-            <button class="secondary-button insight-trigger" id="insightTrigger">Overview</button>
-            <button class="primary-button" id="newTaskButton">+ New task</button>
+            <div class="action-menu-wrap">
+              <button class="primary-button" id="newMenuButton" aria-haspopup="true" aria-expanded="false">+ New</button>
+              <div class="action-menu" id="newMenu" hidden>
+                <button type="button" data-new-action="task">New task</button>
+                <button type="button" data-new-action="event">New event</button>
+                <button type="button" data-new-action="course">Import timetable</button>
+              </div>
+            </div>
+            <div class="action-menu-wrap">
+              <button class="secondary-button" id="viewMenuButton" aria-haspopup="true" aria-expanded="false">View</button>
+              <div class="action-menu" id="viewMenu" hidden>
+                <button type="button" id="insightTrigger">Overview</button>
+              </div>
+            </div>
           </div>
         </header>
 

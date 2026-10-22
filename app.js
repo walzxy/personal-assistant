@@ -3,6 +3,8 @@ const DIFFICULTY = { simple: 1, normal: 1.5, hard: 2.5 };
 const TYPE_LABEL = { regular: "Regular Task", standalone: "Standalone Task", "long-term": "Long-term Task", subtask: "Sub-task" };
 const TAG_COLORS = ["#8EA1B5", "#9CAF88", "#C08A8A", "#CDBBA0", "#A697B5", "#D9A05B", "#86A3A3", "#D8B4B4"];
 const DEFAULT_TAG_COLOR = { regular: "#8EA1B5", standalone: "#D9A05B", "long-term": "#86A3A3", subtask: "#8EA1B5" };
+const PENDING_SYNC_KEY = `${STORAGE_KEY}:pending-cloud`;
+const CLOUD_BACKUP_KEY = `${STORAGE_KEY}:cloud-backup`;
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const DAY_NAMES_ZH = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 const SUPABASE_URL = "https://wqbrteepiwfzgznsuahs.supabase.co";
@@ -22,18 +24,19 @@ const todayIso = () => isoDate(new Date());
 const uid = (prefix) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
 const defaultHabits = [
-  { id: "habit-exercise", name: "锻炼", cadence: "weekly", kpi: 3, checkins: [] },
-  { id: "habit-reading", name: "阅读", cadence: "weekly", kpi: 4, checkins: [] },
-  { id: "habit-water", name: "喝水", cadence: "weekly", kpi: 7, checkins: [] },
-  { id: "habit-skincare", name: "护肤", cadence: "weekly", kpi: 5, checkins: [] },
-  { id: "habit-words", name: "背单词", cadence: "weekly", kpi: 5, checkins: [] },
-  { id: "habit-podcast", name: "听博客", cadence: "monthly", kpi: 8, checkins: [] },
+  { id: "habit-exercise", name: "锻炼", frequency: "weekly", cadence: "weekly", kpi: 3, checkins: [] },
+  { id: "habit-reading", name: "阅读", frequency: "weekly", cadence: "weekly", kpi: 4, checkins: [] },
+  { id: "habit-water", name: "喝水", frequency: "weekly", cadence: "weekly", kpi: 7, checkins: [] },
+  { id: "habit-skincare", name: "护肤", frequency: "weekly", cadence: "weekly", kpi: 5, checkins: [] },
+  { id: "habit-words", name: "背单词", frequency: "weekly", cadence: "weekly", kpi: 5, checkins: [] },
+  { id: "habit-podcast", name: "听博客", frequency: "monthly", cadence: "monthly", kpi: 8, checkins: [] },
 ];
 
 const state = loadState();
 let selectedDate = todayIso();
 let currentTab = "board";
 let currentView = "assignment";
+let showIncompleteOnly = false;
 let pendingImport = null;
 let currentDetailTaskId = null;
 let pendingCompletion = null;
@@ -48,13 +51,27 @@ let cloudSyncedVersion = 0;
 let cloudRealtimeChannel = null;
 let cloudSyncError = "";
 
+function readPendingCloudState() {
+  try {
+    const pending = JSON.parse(localStorage.getItem(PENDING_SYNC_KEY));
+    return pending?.state && typeof pending.state === "object" ? pending : null;
+  } catch (error) {
+    console.warn("Could not read pending cloud changes", error);
+    return null;
+  }
+}
+
+function markPendingCloudState(updatedAt) {
+  localStorage.setItem(PENDING_SYNC_KEY, JSON.stringify({ state: JSON.parse(JSON.stringify(state)), updatedAt }));
+}
+
 function normalizeState(saved) {
   return {
     ...saved,
     tasks: (saved.tasks || []).filter((task) => task.title),
     courses: saved.courses || [],
     events: saved.events || [],
-    habits: saved.habits || defaultHabits,
+    habits: (saved.habits || defaultHabits).map((habit) => ({ ...habit, frequency: habit.frequency || habit.cadence || "weekly", cadence: habit.frequency || habit.cadence || "weekly", checkins: habit.checkins || [] })),
     courseMeta: saved.courseMeta || null,
   };
 }
@@ -82,9 +99,12 @@ function loadState() {
 }
 
 function saveState({ immediate = false } = {}) {
+  const updatedAt = new Date().toISOString();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  localStorage.setItem(`${STORAGE_KEY}:updatedAt`, new Date().toISOString());
+  localStorage.setItem(`${STORAGE_KEY}:updatedAt`, updatedAt);
+  markPendingCloudState(updatedAt);
   cloudStateVersion += 1;
+  updateCloudControls();
   if (immediate) {
     clearTimeout(cloudSyncTimer);
     return syncStateToCloud();
@@ -112,14 +132,15 @@ function updateCloudControls() {
     if (submit) submit.hidden = true;
     if (submit) submit.disabled = false;
     const identity = cloudSession.user.email || cloudSession.user.app_metadata?.provider || "account";
-    setSyncStatus(cloudSyncReady ? `Cloud ready · ${identity}` : cloudSyncError || "Connecting to cloud…", cloudSyncReady ? "cloud" : cloudSyncError ? "error" : "pending");
+    const hasPending = Boolean(readPendingCloudState());
+    setSyncStatus(cloudSyncReady ? (hasPending ? `Pending local changes · ${identity}` : `Cloud ready · ${identity}`) : cloudSyncError || "Connecting to cloud…", cloudSyncReady && !hasPending ? "cloud" : cloudSyncError ? "error" : "pending");
   } else {
     button.textContent = "Connect cloud sync";
     if (signOut) signOut.hidden = true;
     if (github) { github.hidden = false; github.disabled = !cloudClientReady; }
     if (submit) submit.hidden = false;
     if (submit) submit.disabled = !cloudClientReady;
-    setSyncStatus("Local workspace", "local");
+    setSyncStatus(readPendingCloudState() ? "Local workspace · pending cloud changes" : "Local workspace", readPendingCloudState() ? "pending" : "local");
   }
 }
 
@@ -135,8 +156,9 @@ async function syncStateToCloud() {
   if (!cloudSyncReady) return { ok: false, reason: "cloud-not-ready" };
   cloudSyncInFlight = true;
   const versionAtStart = cloudStateVersion;
+  const snapshot = JSON.parse(JSON.stringify(state));
   setSyncStatus("Saving to cloud…", "pending");
-  const { error } = await supabaseClient.from("workspace_state").upsert({ user_id: cloudSession.user.id, state, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+  const { error } = await supabaseClient.from("workspace_state").upsert({ user_id: cloudSession.user.id, state: snapshot, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
   cloudSyncInFlight = false;
   if (error) {
     console.error("Cloud save failed", error);
@@ -146,6 +168,7 @@ async function syncStateToCloud() {
   }
   cloudSyncError = "";
   cloudSyncedVersion = versionAtStart;
+  if (cloudStateVersion === versionAtStart) localStorage.removeItem(PENDING_SYNC_KEY);
   cloudSyncReady = true;
   updateCloudControls();
   if (cloudStateVersion > cloudSyncedVersion) queueCloudSync();
@@ -154,7 +177,7 @@ async function syncStateToCloud() {
 
 function applyIncomingCloudState(nextState, updatedAt) {
   if (!nextState || typeof nextState !== "object") return;
-  if (cloudStateVersion > cloudSyncedVersion) {
+  if (cloudStateVersion > cloudSyncedVersion || readPendingCloudState()) {
     setSyncStatus("Local changes waiting to sync", "pending");
     return;
   }
@@ -182,13 +205,27 @@ async function hydrateStateFromCloud() {
   if (!cloudSession || !supabaseClient) return;
   const localVersionAtLoadStart = cloudStateVersion;
   cloudSyncReady = false;
-  setSyncStatus("Loading cloud workspace…", "pending");
+  setSyncStatus("Syncing…", "pending");
   const { data, error } = await supabaseClient.from("workspace_state").select("state, updated_at").eq("user_id", cloudSession.user.id).maybeSingle();
   if (error) {
     console.error("Cloud load failed", error);
     cloudSyncReady = false;
     cloudSyncError = error.message?.includes("workspace_state") ? "Cloud table unavailable — run the Supabase schema" : `Cloud load failed: ${error.message}`;
     setSyncStatus(cloudSyncError, "error");
+    return;
+  }
+  const pending = readPendingCloudState();
+  if (pending) {
+    if (data?.state && typeof data.state === "object") {
+      localStorage.setItem(CLOUD_BACKUP_KEY, JSON.stringify({ state: data.state, updatedAt: data.updated_at || new Date().toISOString() }));
+    }
+    Object.assign(state, normalizeState(pending.state));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    localStorage.setItem(`${STORAGE_KEY}:updatedAt`, pending.updatedAt || new Date().toISOString());
+    cloudSyncReady = true;
+    render();
+    updateCloudControls();
+    await syncStateToCloud();
     return;
   }
   if (data?.state && typeof data.state === "object") {
@@ -210,7 +247,7 @@ async function hydrateStateFromCloud() {
 }
 
 async function initCloudSync() {
-  setSyncStatus("Loading cloud sync…", "pending");
+  setSyncStatus("Local workspace", "local");
   if (!window.supabase?.createClient) {
     await new Promise((resolve) => {
       const fallback = document.createElement("script");
@@ -242,12 +279,13 @@ async function initCloudSync() {
     }
   });
 }
-function formatDate(value, options = { month: "long", day: "numeric", weekday: "long" }) { return new Intl.DateTimeFormat("zh-CN", options).format(parseDate(value)); }
+function formatDate(value, options = { month: "long", day: "numeric", weekday: "long" }) { return new Intl.DateTimeFormat("en-US", options).format(parseDate(value)); }
 function formatEnglishDate(value, options = { month: "short", day: "numeric" }) { return new Intl.DateTimeFormat("en-US", options).format(parseDate(value)); }
-function formatShortDate(value) { return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" }).format(parseDate(value)); }
+function formatShortDate(value) { return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(parseDate(value)); }
 function difficultyWeight(task) { return Number(task.estimateHours || 0) * (DIFFICULTY[task.difficulty] || 1); }
 function isTaskCompleted(task) { return task.status === "done"; }
 function progressForTask(task) {
+  if (task.status === "done") return 100;
   if (task.type === "long-term") {
     const children = task.children || [];
     return children.length ? Math.round(children.filter((child) => child.status === "done").length / children.length * 100) : 0;
@@ -262,8 +300,8 @@ function taskStatusLabel(task) { return task.status === "done" ? "Completed" : t
 
 function tasksForDate(date) {
   return state.tasks.flatMap((task) => {
-    if (task.type === "long-term") return (task.children || []).filter((child) => child.date === date).map((child) => ({ ...child, parentId: task.id, parentTitle: task.title, type: "subtask", estimateHours: child.estimateHours || 1, difficulty: child.difficulty || task.difficulty, tagColor: child.tagColor || task.tagColor, scheduledDate: child.date, timerStartedAt: task.timerStartedAt, actualMinutes: task.actualMinutes }));
-    if (task.children?.length) return task.children.filter((child) => child.date === date).map((child) => ({ ...child, parentId: task.id, parentTitle: task.title, type: "subtask", estimateHours: child.estimateHours || task.estimateHours / task.children.length, difficulty: child.difficulty || task.difficulty, tagColor: child.tagColor || task.tagColor, scheduledDate: child.date, timerStartedAt: task.timerStartedAt, actualMinutes: task.actualMinutes }));
+    if (task.type === "long-term") return (task.children || []).filter((child) => child.date === date).map((child) => ({ ...child, parentId: task.id, parentTitle: task.title, type: "subtask", estimateHours: child.estimateHours || 1, difficulty: child.difficulty || task.difficulty, tagColor: child.tagColor || task.tagColor, scheduledDate: child.date, timerStartedAt: task.timerStartedAt, actualSeconds: task.actualSeconds, actualMinutes: task.actualMinutes }));
+    if (task.children?.length) return task.children.filter((child) => child.date === date).map((child) => ({ ...child, parentId: task.id, parentTitle: task.title, type: "subtask", estimateHours: child.estimateHours || task.estimateHours / task.children.length, difficulty: child.difficulty || task.difficulty, tagColor: child.tagColor || task.tagColor, scheduledDate: child.date, timerStartedAt: task.timerStartedAt, actualSeconds: task.actualSeconds, actualMinutes: task.actualMinutes }));
     return task.scheduledDate === date ? [task] : [];
   });
 }
@@ -279,9 +317,11 @@ function dailyProgress(date) {
 function colorClass(progress) { return progress < 30 ? "red" : progress < 60 ? "yellow" : "green"; }
 function batteryProgressBar(progress, weight = 1, orientation = "horizontal", showValue = true) {
   const value = progress == null ? 0 : Math.max(0, Math.min(100, Number(progress)));
-  const filled = Math.ceil(value / 10);
+  const filled = Math.floor(value / 10);
+  const partial = value % 10;
+  const color = colorClass(value);
   const face = value >= 100 ? " ^-^" : "";
-  return `<div class="battery-progress ${orientation}" data-weight="${weight}" aria-label="Progress ${value}%, weight ${weight}"><div class="energy-grid">${Array.from({ length: 10 }, (_, index) => `<span class="energy-cell ${index < filled ? `filled ${colorClass(value)}` : ""}"></span>`).join("")}</div>${showValue ? `<span class="battery-value">${value}%${face}</span>` : ""}</div>`;
+  return `<div class="battery-progress ${orientation}" data-weight="${weight}" aria-label="Progress ${value}%, weight ${weight}"><div class="energy-grid">${Array.from({ length: 10 }, (_, index) => { const isPartial = index === filled && partial > 0 && filled < 10; return `<span class="energy-cell ${index < filled ? `filled ${color}` : isPartial ? `partial ${color}` : ""}" ${isPartial ? `style="--partial-fill:${partial * 10}%"` : ""}></span>`; }).join("")}</div>${showValue ? `<span class="battery-value">${value}%${face}</span>` : ""}</div>`;
 }
 function energyMarkup(progress, extraClass = "") { return batteryProgressBar(progress, 1, extraClass.includes("vertical") ? "vertical" : "horizontal", false); }
 
@@ -303,48 +343,51 @@ function renderDateHeader() {
 function renderStats() {
   const tasks = tasksForDate(selectedDate);
   const completed = tasks.filter((task) => taskProgress(task) >= 100 && task.status === "done").length;
-  const active = tasks.filter((task) => taskProgress(task) < 100).length;
-  const courses = courseOccurrencesForDate(selectedDate).length;
+  const active = tasks.filter((task) => task.status !== "done").length;
   $("#statsRow").innerHTML = [
-    ["Tasks", tasks.length, `${completed} completed`],
-    ["In focus", active, "still to carry"],
-    ["Courses", courses, courses ? "on the time axis" : "none today"],
+    ["Done tasks", completed, "completed"],
+    ["To do", active, "remaining"],
   ].map(([label, value, foot]) => `<div class="stat-card"><div class="stat-label">${label}</div><div class="stat-value">${value}</div><div class="stat-foot">${foot}</div></div>`).join("");
 }
 
 function renderTimeline() {
   const entries = [
     ...courseOccurrencesForDate(selectedDate).map((course) => ({ ...course, kind: "course" })),
+    ...eventOccurrencesForDate(selectedDate).map((event) => ({ ...event, kind: "event" })),
     ...tasksForDate(selectedDate).filter((task) => task.startTime || task.endTime).map((task) => ({ ...task, kind: "task", title: task.title, start: task.startTime || "—", end: task.endTime || "" })),
   ].sort((a, b) => String(a.start).localeCompare(String(b.start)));
   if (!entries.length) { $("#timeline").innerHTML = `<div class="timeline-empty">No scheduled blocks yet. Your day is open.</div>`; return; }
   $("#timeline").innerHTML = entries.map((entry) => {
     const conflict = entry.kind === "task" && courseOccurrencesForDate(selectedDate).some((course) => overlaps(entry.start, entry.end, course.start, course.end));
-    const meta = entry.kind === "course" ? [entry.room, entry.teacher].filter(Boolean).join(" · ") : `${TYPE_LABEL[entry.type] || "Task"}${conflict ? " · overlaps a course" : ""}`;
-    const color = entry.kind === "task" ? taskColor(entry) : "#CDBBA0";
-    return `<div class="timeline-item ${entry.kind} ${conflict ? "conflict" : ""} ${entry.difficulty === "hard" ? "hard" : ""}" style="--task-color:${color};--task-tint:${hexToRgba(color)}"><div class="timeline-time">${entry.start}<br>${entry.end}</div><div class="timeline-line"></div><div><div class="timeline-title">${escapeHtml(entry.title || entry.name)}</div><div class="timeline-meta">${escapeHtml(meta || "Time block")}</div></div>${entry.kind === "task" ? `<button class="timeline-action" data-open-task="${entry.parentId || entry.id}">Open</button>` : `<span class="timeline-action">Course</span>`}</div>`;
+    const completed = entry.kind === "task" && entry.status === "done";
+    const meta = entry.kind === "course" ? [entry.room, entry.teacher].filter(Boolean).join(" · ") : entry.kind === "event" ? "Event" : `${TYPE_LABEL[entry.type] || "Task"}${conflict ? " · overlaps a course" : ""}`;
+    const color = entry.kind === "task" ? taskColor(entry) : entry.color || "#CDBBA0";
+    return `<div class="timeline-item ${entry.kind} ${completed ? "completed" : ""} ${conflict ? "conflict" : ""} ${entry.difficulty === "hard" ? "hard" : ""}" style="--task-color:${color};--task-tint:${hexToRgba(color)}"><div class="timeline-time">${entry.start}<br>${entry.end}</div><div class="timeline-line"></div><div><div class="timeline-title">${escapeHtml(entry.title || entry.name)}</div><div class="timeline-meta">${escapeHtml(meta || "Time block")}</div></div>${entry.kind === "task" ? `<button class="timeline-action" data-open-task="${entry.parentId || entry.id}">${completed ? "✓" : "Open"}</button>` : entry.kind === "event" ? `<button class="timeline-action" data-open-event="${entry.id}">Event</button>` : `<span class="timeline-action">Course</span>`}</div>`;
   }).join("");
-  $$("[data-open-task]").forEach((button) => button.addEventListener("click", () => openTaskDetail(button.dataset.openTask)));
+  $("#timeline").querySelectorAll("[data-open-task]").forEach((button) => button.addEventListener("click", () => openTaskDetail(button.dataset.openTask)));
+  $("#timeline").querySelectorAll("[data-open-event]").forEach((button) => button.addEventListener("click", () => openEventDetail(button.dataset.openEvent)));
 }
 
 function renderTasks() {
-  const tasks = tasksForDate(selectedDate);
+  const tasks = tasksForDate(selectedDate).filter((task) => !showIncompleteOnly || task.status !== "done");
+  $("#showIncomplete").textContent = showIncompleteOnly ? "Showing incomplete" : "Show incomplete";
   if (!tasks.length) { $("#taskList").innerHTML = `<div class="empty-state">No task is assigned to this date. You can leave it open or add a small next step.</div>`; return; }
   $("#taskList").innerHTML = tasks.map((task) => {
     const progress = taskProgress(task);
     const status = task.status === "pending_confirmation" || progress >= 100 && task.status !== "done" ? "pending" : task.status === "done" ? "done" : "";
     const detailId = task.parentId || task.id;
-    const childText = task.type === "subtask" ? `Child of ${escapeHtml(task.parentTitle)}` : task.children?.length ? `${task.children.length} same-level subtasks` : `${task.estimateHours || 0}h estimated`;
-    return `<article class="task-card ${task.difficulty === "hard" ? "hard" : ""}" style="--task-color:${taskColor(task)};--task-tint:${hexToRgba(taskColor(task))}"><div class="task-card-top"><div><div class="task-card-title"><span class="task-color-dot"></span>${escapeHtml(task.title)}</div><div class="task-card-meta">${childText} · ${escapeHtml(taskStatusLabel(task))}</div></div><div class="task-card-actions"><span class="status-pill ${status}">${status === "pending" ? "Confirm" : status === "done" ? "Done" : task.type === "subtask" ? "Sub-task" : task.type}</span><button class="icon-button" data-open-task="${detailId}" aria-label="打开任务">›</button></div></div><div class="progress-row">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div><div class="task-footer"><span>${task.actualMinutes || 0} min tracked</span><button class="timer-button ${task.timerStartedAt ? "running" : ""}" data-start-task="${detailId}">${timerLabel(task)}</button></div>${task.children?.length && task.type !== "long-term" ? `<div class="subtask-note">${task.children.map((child) => `${child.status === "done" ? "✓" : "○"} ${escapeHtml(child.title)}`).join("　")}</div>` : ""}</article>`;
+    const childText = task.type === "subtask" ? `<span class="subtask-marker" title="Sub-task">⌘</span> ${escapeHtml(task.parentTitle)}` : task.children?.length ? `${task.children.length} subtasks` : `${task.estimateHours || 0}h estimated`;
+    return `<article class="task-card ${task.difficulty === "hard" ? "hard" : ""} ${task.status === "done" ? "completed" : ""}" style="--task-color:${taskColor(task)};--task-tint:${hexToRgba(taskColor(task))}"><div class="task-card-top"><div><div class="task-card-title"><span class="task-color-dot"></span>${escapeHtml(task.title)}</div><div class="task-card-meta">${childText}</div></div><div class="task-card-actions"><span class="status-pill ${status}">${status === "pending" ? "Confirm" : status === "done" ? "Done" : task.status === "in_progress" ? "In progress" : "Not started"}</span><button class="icon-button detail-arrow" data-open-task="${detailId}" aria-label="打开任务">›</button></div></div><div class="progress-row">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div><div class="task-footer"><span data-timer-minutes="${detailId}">${trackedMinutes(task)} min tracked</span><button class="timer-button ${task.timerStartedAt ? "running" : ""}" data-start-task="${detailId}" aria-label="${task.timerStartedAt ? "Pause timer" : "Start timer"}">${task.timerStartedAt ? "■" : "▶"}</button></div>${task.children?.length && task.type !== "long-term" ? `<div class="subtask-note">${task.children.map((child) => `${child.status === "done" ? "✓" : "○"} ${escapeHtml(child.title)}`).join("　")}</div>` : ""}</article>`;
   }).join("");
-  $$(`[data-open-task]`).forEach((button) => button.addEventListener("click", () => openTaskDetail(button.dataset.openTask)));
-  $$(`[data-start-task]`).forEach((button) => button.addEventListener("click", () => toggleTimer(button.dataset.startTask)));
+  $("#taskList").querySelectorAll("[data-open-task]").forEach((button) => button.addEventListener("click", () => openTaskDetail(button.dataset.openTask)));
+  $("#taskList").querySelectorAll("[data-start-task]").forEach((button) => button.addEventListener("click", () => toggleTimer(button.dataset.startTask)));
 }
 
 function renderLongTerm() {
   const tasks = state.tasks.filter((task) => task.type === "long-term");
   if (!tasks.length) { $("#longTermList").innerHTML = `<div class="empty-state">Long-term projects will appear here when you create one.</div>`; return; }
-  $("#longTermList").innerHTML = tasks.map((task) => { const progress = progressForTask(task); return `<article class="long-term-card" style="--task-color:${taskColor(task)};--task-tint:${hexToRgba(taskColor(task))}"><div class="task-card-top"><div><div class="task-card-title"><span class="task-color-dot"></span>${escapeHtml(task.title)}</div><div class="task-card-meta">${(task.children || []).filter((child) => child.status === "done").length} / ${(task.children || []).length} subtasks complete</div></div><span class="status-pill ${task.status === "done" ? "done" : ""}">${progress}%</span></div><div class="progress-row">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div></article>`; }).join("");
+  $("#longTermList").innerHTML = tasks.map((task) => { const progress = progressForTask(task); return `<article class="long-term-card" data-open-task="${task.id}" style="--task-color:${taskColor(task)};--task-tint:${hexToRgba(taskColor(task))}"><div class="task-card-top"><div><div class="task-card-title"><span class="task-color-dot"></span>${escapeHtml(task.title)}</div><div class="task-card-meta">${(task.children || []).filter((child) => child.status === "done").length} / ${(task.children || []).length} subtasks</div></div><span class="status-pill ${task.status === "done" ? "done" : ""}">${progress}%</span></div><div class="progress-row">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div></article>`; }).join("");
+  $("#longTermList").querySelectorAll("[data-open-task]").forEach((card) => card.addEventListener("click", () => openTaskDetail(card.dataset.openTask)));
 }
 
 function renderInsights() {
@@ -377,6 +420,7 @@ function renderActiveTab() {
     bindWeekView();
     bindEventButtons();
     bindHeatmapView();
+    bindMonthView();
     bindHabitButtons();
   }
   $$(".view-tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === currentTab));
@@ -388,7 +432,7 @@ function addDays(value, amount) { const date = parseDate(value); date.setDate(da
 function weekDatesFor(value = selectedDate) { const base = parseDate(value); const monday = new Date(base); const day = monday.getDay() || 7; monday.setDate(monday.getDate() - day + 1); return Array.from({ length: 7 }, (_, i) => addDays(isoDate(monday), i)); }
 function boardItems() {
   return state.tasks.flatMap((task) => {
-    if (task.children?.length && ["regular", "long-term"].includes(task.type)) return task.children.map((child) => ({ ...child, id: child.id, sourceId: child.id, parentId: task.id, parentTitle: task.title, type: "subtask", scheduledDate: child.date, estimateHours: child.estimateHours || Math.max(.25, (task.estimateHours || 1) / task.children.length), difficulty: child.difficulty || task.difficulty, tagColor: child.tagColor || task.tagColor, timerStartedAt: task.timerStartedAt, actualMinutes: task.actualMinutes }));
+    if (task.children?.length && ["regular", "long-term"].includes(task.type)) return task.children.map((child) => ({ ...child, id: child.id, sourceId: child.id, parentId: task.id, parentTitle: task.title, type: "subtask", scheduledDate: child.date, estimateHours: child.estimateHours || Math.max(.25, (task.estimateHours || 1) / task.children.length), difficulty: child.difficulty || task.difficulty, tagColor: child.tagColor || task.tagColor, timerStartedAt: task.timerStartedAt, actualSeconds: task.actualSeconds, actualMinutes: task.actualMinutes }));
     return task;
   }).filter((task) => task.scheduledDate);
 }
@@ -406,7 +450,7 @@ function renderBoardView() {
   const today = todayIso(); const tomorrow = addDays(today, 1); const week = weekDatesFor(today); const groups = { today: [], tomorrow: [], week: [] };
   boardItems().forEach((item) => { const bucket = boardBucket(item.scheduledDate, today, tomorrow, week); if (bucket) groups[bucket].push(item); });
   const columns = [["today", "Today", formatEnglishDate(today)], ["tomorrow", "Tomorrow", formatEnglishDate(tomorrow)], ["week", "This week", `${formatEnglishDate(week[0])} — ${formatEnglishDate(week[6])}`]];
-  return `<div class="board-heading section-heading"><div><h2>Task board</h2></div><div class="board-hint">${boardItems().length} actionable items</div></div><div class="kanban-board">${columns.map(([key, title, subtitle]) => `<section class="kanban-column" data-board-column="${key}" data-drop-date="${key === "today" ? today : key === "tomorrow" ? tomorrow : addDays(today, 2)}"><div class="kanban-column-header"><div><h3>${title}</h3><span>${subtitle}</span></div><b>${groups[key].length}</b></div><div class="board-drop-zone">${groups[key].length ? groups[key].map((item) => { const progress = taskProgress(item); const owner = item.parentId || item.id; return `<article class="kanban-card ${item.difficulty === "hard" ? "hard" : ""}" draggable="true" data-board-id="${item.id}" data-board-parent="${item.parentId || ""}" data-open-task="${owner}" style="--task-color:${taskColor(item)};--task-tint:${hexToRgba(taskColor(item))}"><div class="kanban-card-title"><span class="task-color-dot"></span><span>${escapeHtml(item.title)}</span></div><div class="kanban-card-meta"><span>${Number(item.estimateHours || 0).toLocaleString("en-US")}h${item.parentId ? ` · ${escapeHtml(item.parentTitle)}` : ""}</span><span>${item.scheduledDate === today ? "Today" : formatEnglishDate(item.scheduledDate)}</span></div><div class="kanban-card-footer">${batteryProgressBar(progress, difficultyWeight(item), "vertical")}<button class="timer-button ${item.timerStartedAt ? "running" : ""}" data-start-task="${owner}">${item.timerStartedAt ? `Running · ${elapsedLabel(item)}` : "Start timer"}</button></div></article>`; }).join("") : `<div class="board-empty">Drop a task here</div>`}</div></section>`).join("")}</div>`;
+  return `<div class="board-heading section-heading"><div><h2>Task board</h2></div><div class="board-hint">${boardItems().length} actionable items</div></div><div class="kanban-board">${columns.map(([key, title, subtitle]) => `<section class="kanban-column" data-board-column="${key}" data-drop-date="${key === "today" ? today : key === "tomorrow" ? tomorrow : addDays(today, 2)}"><div class="kanban-column-header"><div><h3>${title}</h3><span>${subtitle}</span></div><b>${groups[key].length}</b></div><div class="board-drop-zone">${groups[key].length ? groups[key].map((item) => { const progress = taskProgress(item); const owner = item.parentId || item.id; return `<article class="kanban-card ${item.difficulty === "hard" ? "hard" : ""}" draggable="true" data-board-id="${item.id}" data-board-parent="${item.parentId || ""}" data-open-task="${owner}" style="--task-color:${taskColor(item)};--task-tint:${hexToRgba(taskColor(item))}"><div class="kanban-card-title"><span class="task-color-dot"></span><span>${escapeHtml(item.title)}</span></div><div class="kanban-card-meta"><span>${Number(item.estimateHours || 0).toLocaleString("en-US")}h${item.parentId ? ` · ${escapeHtml(item.parentTitle)}` : ""}</span><span>${item.scheduledDate === today ? "Today" : formatEnglishDate(item.scheduledDate)}</span></div><div class="kanban-card-footer">${batteryProgressBar(progress, difficultyWeight(item), "vertical")}<button class="timer-button ${item.timerStartedAt ? "running" : ""}" data-start-task="${owner}" aria-label="${item.timerStartedAt ? "Pause timer" : "Start timer"}">${item.timerStartedAt ? "■" : "▶"}</button></div></article>`; }).join("") : `<div class="board-empty">Drop a task here</div>`}</div></section>`).join("")}</div>`;
 }
 function bindBoardView() {
   $$(`[data-board-id]`).forEach((card) => {
@@ -437,11 +481,11 @@ function deleteEvent() { if (!currentEventId) return; const event = state.events
 function layoutCalendarTasks(tasks) {
   const sorted = [...tasks].sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime) || timeToMinutes(a.endTime) - timeToMinutes(b.endTime)); const lanes = []; const placed = [];
   sorted.forEach((task) => { const start = timeToMinutes(task.startTime); const end = timeToMinutes(task.endTime); let lane = lanes.findIndex((lastEnd) => start >= lastEnd); if (lane < 0) { lane = lanes.length; lanes.push(end); } else lanes[lane] = end; placed.push({ task, start, end, lane }); });
-  return placed.map((item) => { const connected = placed.filter((other) => other.start < item.end && other.end > item.start); const laneCount = Math.max(1, ...connected.map((other) => other.lane + 1)); return { ...item, laneCount }; });
+  return placed.map((item) => { const connected = placed.filter((other) => other.start < item.end && other.end > item.start); const laneCount = Math.max(1, connected.length ? Math.max(...connected.map((other) => other.lane + 1)) : 1); return { ...item, laneCount }; });
 }
 function calendarBlockStyle(start, end) { const top = Math.max(0, (start - CALENDAR_START) / 5 * CALENDAR_SLOT_HEIGHT); const height = Math.max(25, (end - start) / 5 * CALENDAR_SLOT_HEIGHT); return `top:${top}px;height:${height}px;`; }
 function renderCalendarDay(date) {
-  const { courses, tasks } = calendarItemsForDate(date); const laidOut = layoutCalendarTasks(tasks); const backgrounds = courses.map((course) => `<div class="calendar-background-item ${course.kind === "event" ? "event-background" : ""}" ${course.kind === "event" ? `data-open-event="${course.id}"` : ""} style="${calendarBlockStyle(timeToMinutes(course.start), timeToMinutes(course.end))};--event-color:${course.color || "#E8DCD1"}"><strong>${escapeHtml(course.name || course.title)}</strong><span>${course.start}—${course.end}</span></div>`).join(""); const foreground = laidOut.map(({ task, start, end, lane, laneCount }) => { const owner = task.parentId || task.id; const width = 100 / laneCount; const widthStyle = laneCount === 1 ? "100%" : `calc(${width}% - 4px)`; return `<article class="calendar-task-item ${laneCount > 1 ? "overlapping" : ""} ${task.difficulty === "hard" ? "hard" : ""}" draggable="true" data-calendar-id="${task.id}" data-calendar-parent="${task.parentId || ""}" data-open-task="${owner}" style="${calendarBlockStyle(start, end)}left:${lane * width}%;width:${widthStyle};--task-color:${taskColor(task)}"><span class="calendar-task-title">${escapeHtml(task.title)}</span><span class="calendar-task-time">${task.startTime}—${task.endTime}</span></article>`; }).join(""); return `<div class="week-day-column"><div class="week-day-header"><strong>${DAY_NAMES_ZH[parseDate(date).getDay()]}</strong><span>${formatShortDate(date)} · ${dailyProgress(date) == null ? "N/A" : `${dailyProgress(date)}%`}</span></div><div class="week-grid" data-week-date="${date}">${backgrounds}${foreground}</div></div>`;
+  const { courses, tasks } = calendarItemsForDate(date); const laidOut = layoutCalendarTasks(tasks); const backgrounds = courses.map((course) => `<div class="calendar-background-item ${course.kind === "event" ? "event-background" : ""}" ${course.kind === "event" ? `data-open-event="${course.id}"` : ""} style="${calendarBlockStyle(timeToMinutes(course.start), timeToMinutes(course.end))};--event-color:${course.color || "#E8DCD1"}"><strong>${escapeHtml(course.name || course.title)}</strong><span>${course.start}—${course.end}</span></div>`).join(""); const foreground = laidOut.map(({ task, start, end, lane, laneCount }) => { const owner = task.parentId || task.id; const width = 100 / laneCount; return `<article class="calendar-task-item ${laneCount > 1 ? "overlapping" : ""} ${task.difficulty === "hard" ? "hard" : ""}" draggable="true" data-calendar-id="${task.id}" data-calendar-parent="${task.parentId || ""}" data-open-task="${owner}" style="${calendarBlockStyle(start, end)}left:${lane * width}%;width:${width}%;--task-color:${taskColor(task)}"><span class="calendar-task-title">${escapeHtml(task.title)}</span><span class="calendar-task-time">${task.startTime}—${task.endTime}</span></article>`; }).join(""); return `<div class="week-day-column"><div class="week-day-header"><strong>${DAY_NAMES[parseDate(date).getDay()]}</strong><span>${formatShortDate(date)} · ${dailyProgress(date) == null ? "N/A" : `${dailyProgress(date)}%`}</span></div><div class="week-grid" data-week-date="${date}">${backgrounds}${foreground}</div></div>`;
 }
 function renderWeekView() {
   const days = weekDatesFor(selectedDate); const labels = Array.from({ length: 15 }, (_, index) => `${String(8 + index).padStart(2, "0")}:00`);
@@ -460,26 +504,33 @@ function bindEventButtons() { $$('[data-open-event]').forEach((button) => button
 
 function monthHeatmapData() { const date = parseDate(selectedDate); const year = date.getFullYear(); const month = date.getMonth(); const last = new Date(year, month + 1, 0).getDate(); return { year, month, days: Array.from({ length: last }, (_, index) => { const day = String(index + 1).padStart(2, "0"); const iso = `${year}-${String(month + 1).padStart(2, "0")}-${day}`; return { iso, day: index + 1, progress: dailyProgress(iso) }; }) }; }
 function heatClass(progress) { if (progress == null || progress === 0) return "empty"; if (progress < 30) return "red"; if (progress < 60) return "yellow"; return "green"; }
-function renderHeatmapView() { const { year, month, days } = monthHeatmapData(); const firstOffset = (new Date(year, month, 1).getDay() + 6) % 7; const cells = [...Array(firstOffset).fill(null), ...days]; return `<div class="section-heading"><div><div class="section-kicker">DAILY PROGRESS</div><h2>Task heatmap · ${year} / ${String(month + 1).padStart(2, "0")}</h2><p class="heatmap-description">Each square reads the saved daily weighted progress. Empty days stay out of the average.</p></div><div class="calendar-nav"><button class="secondary-button" id="heatPrev">‹ Month</button><button class="secondary-button" id="heatNext">Month ›</button></div></div><div class="heatmap-card"><div class="heatmap-weekdays">${DAY_NAMES_ZH.slice(1).concat(DAY_NAMES_ZH[0]).map((day) => `<span>${day}</span>`).join("")}</div><div class="heatmap-month-grid">${cells.map((cell) => cell ? `<button class="heat-cell ${heatClass(cell.progress)}" data-heat-date="${cell.iso}" data-heat-progress="${cell.progress == null ? "N/A" : `${cell.progress}%`}" aria-label="${cell.iso} ${cell.progress == null ? "no tasks" : `${cell.progress}%`}"><span>${cell.day}</span></button>` : `<span class="heat-cell blank" aria-hidden="true"></span>`).join("")}</div><div class="heatmap-legend"><span><i class="heat-swatch empty"></i>No tasks</span><span><i class="heat-swatch red"></i>0–30%</span><span><i class="heat-swatch yellow"></i>30–60%</span><span><i class="heat-swatch green"></i>60–100%</span></div><div class="heat-tooltip" id="heatTooltip" role="status"></div></div>`; }
+function renderHeatmapView() { const { year, month, days } = monthHeatmapData(); const firstOffset = (new Date(year, month, 1).getDay() + 6) % 7; const cells = [...Array(firstOffset).fill(null), ...days]; return `<div class="section-heading"><div><div class="section-kicker">DAILY PROGRESS</div><h2>Task heatmap · ${year} / ${String(month + 1).padStart(2, "0")}</h2><p class="heatmap-description">Each square reads the saved daily weighted progress. Empty days stay out of the average.</p></div><div class="calendar-nav"><button class="secondary-button" id="heatPrev">‹ Month</button><button class="secondary-button" id="heatNext">Month ›</button></div></div><div class="heatmap-card"><div class="heatmap-weekdays">${DAY_NAMES.slice(1).concat(DAY_NAMES[0]).map((day) => `<span>${day.slice(0, 3)}</span>`).join("")}</div><div class="heatmap-month-grid">${cells.map((cell) => cell ? `<button class="heat-cell ${heatClass(cell.progress)}" data-heat-date="${cell.iso}" data-heat-progress="${cell.progress == null ? "N/A" : `${cell.progress}%`}" aria-label="${cell.iso} ${cell.progress == null ? "no tasks" : `${cell.progress}%`}"><span>${cell.day}</span></button>` : `<span class="heat-cell blank" aria-hidden="true"></span>`).join("")}</div><div class="heatmap-legend"><span><i class="heat-swatch empty"></i>No tasks</span><span><i class="heat-swatch red"></i>0–30%</span><span><i class="heat-swatch yellow"></i>30–60%</span><span><i class="heat-swatch green"></i>60–100%</span></div><div class="heat-tooltip" id="heatTooltip" role="status"></div></div>`; }
 function bindHeatmapView() { const card = $(".heatmap-card"); const tooltip = $("#heatTooltip"); if (!card || !tooltip) return; $$(`[data-heat-date]`).forEach((cell) => { cell.addEventListener("mouseenter", () => { tooltip.textContent = `${cell.dataset.heatDate} · ${cell.dataset.heatProgress}`; tooltip.classList.add("show"); }); cell.addEventListener("mousemove", (event) => { const rect = card.getBoundingClientRect(); tooltip.style.left = `${event.clientX - rect.left + 12}px`; tooltip.style.top = `${event.clientY - rect.top + 12}px`; }); cell.addEventListener("mouseleave", () => tooltip.classList.remove("show")); }); $("#heatPrev")?.addEventListener("click", () => { const date = parseDate(selectedDate); date.setMonth(date.getMonth() - 1); selectedDate = isoDate(date); render(); }); $("#heatNext")?.addEventListener("click", () => { const date = parseDate(selectedDate); date.setMonth(date.getMonth() + 1); selectedDate = isoDate(date); render(); }); }
+function bindMonthView() { $$(`[data-month-date]`).forEach((cell) => cell.addEventListener("click", () => { selectedDate = cell.dataset.monthDate; currentTab = "today"; resetPageScroll(); render(); })); }
 
+// Reserved extension point for anniversaries, birthdays and mood notes.
+const monthAnnotations = { anniversaries: [], birthdays: [], moods: [] };
 function renderMonthView() {
-  const date = parseDate(selectedDate); const year = date.getFullYear(); const month = date.getMonth(); const first = new Date(year, month, 1); const last = new Date(year, month + 1, 0); const start = first.getDay();
-  const cells = []; for (let i = 0; i < start; i++) cells.push(`<div class="calendar-cell muted"></div>`); for (let i = 1; i <= last.getDate(); i++) { const d = new Date(year, month, i); const iso = isoDate(d); const hardTasks = tasksForDate(iso).filter((task) => task.difficulty === "hard"); const events = eventOccurrencesForDate(iso); cells.push(`<div class="calendar-cell ${iso === selectedDate ? "today" : ""}"><strong>${i}</strong>${events.slice(0, 2).map((event) => `<button class="calendar-event event" data-open-event="${event.id}">${escapeHtml(event.name || event.title)}</button>`).join("")}${hardTasks.slice(0, 2).map((task) => `<div class="calendar-event hard-event" style="--task-color:${taskColor(task)};--task-tint:${hexToRgba(taskColor(task))}">${escapeHtml(task.title)}</div>`).join("")}</div>`); }
-  return `<div class="section-heading"><div><div class="section-kicker">MONTH VIEW</div><h2>${formatDate(`${year}-${String(month + 1).padStart(2, "0")}-01`, { month: "long", year: "numeric" })}</h2><div class="month-filter-note">Events and hard tasks only</div></div></div><div class="calendar-card"><div class="calendar-grid">${DAY_NAMES_ZH.map((day) => `<div class="calendar-day-name">${day}</div>`).join("")}${cells.join("")}</div></div>`;
+  const date = parseDate(selectedDate); const year = date.getFullYear(); const month = date.getMonth(); const first = new Date(year, month, 1); const last = new Date(year, month + 1, 0); const start = (first.getDay() + 6) % 7;
+  const cells = []; for (let i = 0; i < start; i++) cells.push(`<div class="calendar-cell muted" aria-hidden="true"></div>`);
+  for (let i = 1; i <= last.getDate(); i++) {
+    const d = new Date(year, month, i); const iso = isoDate(d); const hardTasks = tasksForDate(iso).filter((task) => task.difficulty === "hard"); const events = eventOccurrencesForDate(iso); const markers = [...events.map((event) => ({ color: event.color || "#E8DCD1", label: event.name || event.title || "Event" })), ...hardTasks.map((task) => ({ color: taskColor(task), label: task.title }))];
+    cells.push(`<button type="button" class="calendar-cell ${iso === selectedDate ? "today" : ""}" data-month-date="${iso}" aria-label="Open ${formatDate(iso)}"><strong>${i}</strong><span class="month-dots">${markers.slice(0, 5).map((marker) => `<i class="month-dot" style="--dot-color:${marker.color}" title="${escapeHtml(marker.label)}"></i>`).join("")}</span></button>`);
+  }
+  return `<div class="section-heading"><div><div class="section-kicker">MONTH VIEW</div><h2>${formatDate(`${year}-${String(month + 1).padStart(2, "0")}-01`, { month: "long", year: "numeric" })}</h2></div></div><div class="calendar-card"><div class="calendar-grid">${DAY_NAMES.map((day) => `<div class="calendar-day-name">${day.slice(0, 3)}</div>`).join("")}${cells.join("")}</div></div>`;
 }
 
 function currentHabitStats() {
   const now = parseDate(selectedDate); const monday = new Date(now); const day = monday.getDay() || 7; monday.setDate(monday.getDate() - day + 1); const weekStart = isoDate(monday); const monthPrefix = selectedDate.slice(0, 7);
-  return state.habits.map((habit) => { const dates = (habit.checkins || []).filter((date) => habit.cadence === "weekly" ? date >= weekStart && date <= isoDate(new Date(monday.getTime() + 6 * 86400000)) : date.startsWith(monthPrefix)); const count = dates.length; return { habit, dates, count, achieved: count >= habit.kpi }; });
+  return state.habits.map((habit) => { const frequency = habit.frequency || habit.cadence || "weekly"; const dates = (habit.checkins || []).filter((date) => frequency === "weekly" ? date >= weekStart && date <= isoDate(new Date(monday.getTime() + 6 * 86400000)) : date.startsWith(monthPrefix)); const count = dates.length; return { habit, dates, count, achieved: count >= habit.kpi, frequency }; });
 }
 function habitStreak(habit) { const dates = new Set(habit.checkins || []); let cursor = parseDate(todayIso()); let streak = 0; while (dates.has(isoDate(cursor))) { streak += 1; cursor.setDate(cursor.getDate() - 1); } return streak; }
 function habitHeatmapMarkup(habit) { const end = parseDate(selectedDate); const endDay = end.getDay() || 7; end.setDate(end.getDate() + (7 - endDay)); const start = new Date(end); start.setDate(end.getDate() - 83); const checked = new Set(habit.checkins || []); const cells = Array.from({ length: 84 }, (_, index) => { const date = new Date(start); date.setDate(start.getDate() + index); const iso = isoDate(date); return `<span class="habit-heat-cell ${checked.has(iso) ? "checked" : ""} ${iso === todayIso() ? "today" : ""}" title="${iso} · ${checked.has(iso) ? "checked" : "not checked"}"></span>`; }).join(""); return `<div class="habit-heatmap"><div class="detail-label">Check-in history · last 12 weeks</div><div class="habit-heatmap-caption">Only the day you check in is recorded. Past days cannot be filled retroactively.</div><div class="habit-heatmap-grid">${cells}</div></div>`; }
-function renderHabitsView() { const today = todayIso(); return `<div class="section-heading"><div><div class="section-kicker">HABIT BOARD</div><h2>Habits</h2></div><button class="primary-button" id="newHabitButton">+ New habit</button></div><div class="task-list">${currentHabitStats().map(({ habit, count, achieved }) => { const checkedToday = (habit.checkins || []).includes(today); return `<article class="task-card habit-card" data-open-habit="${habit.id}"><div class="task-card-top"><div><div class="task-card-title">${escapeHtml(habit.name)}</div><div class="task-card-meta">${habit.cadence === "weekly" ? "This week" : "This month"} · KPI ${habit.kpi} times · ${count} achieved · ${habitStreak(habit)} day streak</div></div><button class="habit-edit-button" data-open-habit="${habit.id}">Edit</button></div><div class="task-footer"><span>${checkedToday ? "Checked today" : "Not checked today"}</span><button data-check-habit="${habit.id}" ${checkedToday ? "disabled" : ""}>${checkedToday ? "Checked" : "Check in today"}</button></div></article>`; }).join("")}</div>`; }
+function renderHabitsView() { const today = todayIso(); return `<div class="section-heading habit-heading"><div><div class="section-kicker">HABIT BOARD</div><h2>Habits</h2></div><button class="icon-button add-icon-button" id="newHabitButton" aria-label="Add habit">+</button></div><div class="task-list">${currentHabitStats().map(({ habit, count, frequency }) => { const checkedToday = (habit.checkins || []).includes(today); return `<article class="task-card habit-card ${checkedToday ? "checked-today" : ""}" data-open-habit="${habit.id}"><div class="habit-card-main"><div><div class="task-card-title">${escapeHtml(habit.name)}</div><div class="task-card-meta">${frequency === "weekly" ? "This week" : "This month"} KPI · ${habit.kpi} times</div></div><div class="habit-count-box" aria-label="${count} of ${habit.kpi} completed">${count}/${habit.kpi}</div></div><div class="habit-card-actions"><button class="habit-check-button" data-check-habit="${habit.id}" ${checkedToday ? "disabled" : ""} aria-label="${checkedToday ? "Checked today" : "Check in today"}">${checkedToday ? "✓" : "✓"}</button><button class="habit-edit-button" data-open-habit="${habit.id}" aria-label="Edit habit">Edit</button></div></article>`; }).join("")}</div>`; }
 function bindHabitButtons() { $$('[data-check-habit]').forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); checkHabit(button.dataset.checkHabit); })); $$('[data-open-habit]').forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); openHabitDetail(button.dataset.openHabit); })); $("#newHabitButton")?.addEventListener("click", () => openHabitDetail()); }
 let currentHabitId = null;
-function openHabitDetail(habitId = null) { const habit = state.habits.find((item) => item.id === habitId); currentHabitId = habit?.id || null; const draft = habit || { name: "", cadence: "weekly", kpi: 3, checkins: [] }; const count = habit ? (currentHabitStats().find((item) => item.habit.id === habitId)?.count || 0) : 0; $("#habitDetailTitle").textContent = habit ? habit.name : "Add a habit"; $("#habitDetailContent").innerHTML = `<div class="detail-block"><div class="habit-form-grid"><label>Name<input id="editHabitName" value="${escapeHtml(draft.name)}" maxlength="60" placeholder="例如：锻炼、阅读" required /></label><label>Cadence<select id="editHabitCadence"><option value="weekly" ${draft.cadence === "weekly" ? "selected" : ""}>Weekly</option><option value="monthly" ${draft.cadence === "monthly" ? "selected" : ""}>Monthly</option></select></label><label>KPI times<input id="editHabitKpi" type="number" min="1" max="31" step="1" value="${draft.kpi}" required /></label></div>${habit ? `<div class="detail-help">Current period: ${count} / ${habit.kpi} achieved · ${habitStreak(habit)} day streak.</div>${habitHeatmapMarkup(habit)}` : `<div class="detail-help">KPI counts check-in days in the selected weekly or monthly period.</div>`}</div>`; $("#deleteHabitButton").hidden = !habit; $("#habitDetailModal").showModal(); }
-function saveHabitChanges() { const name = $("#editHabitName").value.trim(); if (!name) { toast("Please give the habit a name."); return; } const cadence = $("#editHabitCadence").value; const kpi = Math.max(1, Number($("#editHabitKpi").value) || 1); state.habits ||= []; if (currentHabitId) { const habit = state.habits.find((item) => item.id === currentHabitId); if (!habit) return; habit.name = name; habit.cadence = cadence; habit.kpi = kpi; } else state.habits.push({ id: uid("habit"), name, cadence, kpi, checkins: [] }); saveState(); $("#habitDetailModal").close(); render(); toast(currentHabitId ? "Habit changes saved." : "Habit added."); currentHabitId = null; }
+function openHabitDetail(habitId = null) { const habit = state.habits.find((item) => item.id === habitId); currentHabitId = habit?.id || null; const draft = habit || { name: "", frequency: "weekly", kpi: 3, checkins: [] }; const frequency = draft.frequency || draft.cadence || "weekly"; const count = habit ? (currentHabitStats().find((item) => item.habit.id === habitId)?.count || 0) : 0; $("#habitDetailTitle").textContent = habit ? habit.name : "Add a habit"; $("#habitDetailContent").innerHTML = `<div class="detail-block"><div class="habit-form-grid"><label>Name<input id="editHabitName" value="${escapeHtml(draft.name)}" maxlength="60" placeholder="例如：锻炼、阅读" required /></label><label>Frequency<select id="editHabitFrequency"><option value="weekly" ${frequency === "weekly" ? "selected" : ""}>Weekly</option><option value="monthly" ${frequency === "monthly" ? "selected" : ""}>Monthly</option></select></label><label>KPI times<input id="editHabitKpi" type="number" min="1" max="31" step="1" value="${draft.kpi}" required /></label></div>${habit ? `<div class="detail-help">Current period: ${count} / ${habit.kpi}.</div>${habitHeatmapMarkup(habit)}` : `<div class="detail-help">Only the date you check in counts toward the selected weekly or monthly KPI.</div>`}</div>`; $("#deleteHabitButton").hidden = !habit; $("#habitDetailModal").showModal(); }
+function saveHabitChanges() { const name = $("#editHabitName").value.trim(); if (!name) { toast("Please give the habit a name."); return; } const frequency = $("#editHabitFrequency").value; const kpi = Math.max(1, Number($("#editHabitKpi").value) || 1); state.habits ||= []; if (currentHabitId) { const habit = state.habits.find((item) => item.id === currentHabitId); if (!habit) return; habit.name = name; habit.frequency = frequency; habit.cadence = frequency; habit.kpi = kpi; } else state.habits.push({ id: uid("habit"), name, frequency, cadence: frequency, kpi, checkins: [] }); saveState(); $("#habitDetailModal").close(); render(); toast(currentHabitId ? "Habit changes saved." : "Habit added."); currentHabitId = null; }
 function deleteHabit() { if (!currentHabitId) return; const habit = state.habits.find((item) => item.id === currentHabitId); if (!habit) return; state.habits = state.habits.filter((item) => item.id !== currentHabitId); saveState(); $("#habitDetailModal").close(); currentHabitId = null; render(); toast("Habit deleted."); }
 
 function placeholderText(view) { return { "message-board": { title: "A message board for Xiao Yu.", body: "The assistant entry point is reserved for a later iteration. The current build keeps the task page as the home base." }, reading: { title: "Reading and writing, later.", body: "The content library will have its own data window after the daily management core is stable." }, archive: { title: "A quiet archive for rewards.", body: "Reward triggers and collection records are intentionally left as a future module." }, inspiration: { title: "A box for ideas.", body: "The inspiration box will share the same durable foundation when its content model is ready." } }[view] || { title: "Coming later.", body: "This space is reserved for the next iteration." }; }
@@ -524,7 +575,29 @@ function tagColorOptions(selected) { const labels = { "#8EA1B5": "Dusty Blue · 
 function addSubtask(taskId) { const task = state.tasks.find((item) => item.id === taskId); if (!task || (task.type === "regular" && (task.children || []).length >= 3)) return; task.children ||= []; task.children.push({ id: uid("subtask"), title: "New subtask", date: task.scheduledDate || selectedDate, progress: 0, status: "not_started", estimateHours: 1 }); saveState(); render(); openTaskDetail(taskId); toast("Subtask added — edit its title and date before saving."); }
 function removeSubtask(taskId, index) { const task = state.tasks.find((item) => item.id === taskId); if (!task) return; task.children.splice(index, 1); saveState(); render(); openTaskDetail(taskId); }
 function openCompletionPrompt(taskId, childIndex = null) { const task = state.tasks.find((item) => item.id === taskId); if (!task) return; pendingCompletion = { taskId, childIndex }; const child = childIndex == null ? null : task.children?.[childIndex]; $("#completionMessage").textContent = child ? `“${child.title}” reached 100%. Confirm that this subtask is actually complete.` : `“${task.title}” reached 100%. Confirm that this task is actually complete.`; $("#completionModal").showModal(); }
-function applyPendingCompletion() { if (!pendingCompletion) return; const task = state.tasks.find((item) => item.id === pendingCompletion.taskId); if (!task) return; if (pendingCompletion.childIndex == null) { task.status = "done"; task.progress = 100; } else { const child = task.children?.[pendingCompletion.childIndex]; if (!child) return; child.progress = 100; child.status = "done"; } pendingCompletion = null; saveState(); $("#completionModal").close(); if ($("#taskDetailModal").open) $("#taskDetailModal").close(); render(); toast("Completion confirmed."); }
+async function applyPendingCompletion() {
+  if (!pendingCompletion) return;
+  const task = state.tasks.find((item) => item.id === pendingCompletion.taskId);
+  if (!task) return;
+  if (pendingCompletion.childIndex == null) {
+    task.status = "done";
+    task.progress = 100;
+  } else {
+    const child = task.children?.[pendingCompletion.childIndex];
+    if (!child) return;
+    child.progress = 100;
+    child.status = "done";
+  }
+  pendingCompletion = null;
+  const cloudSave = saveState({ immediate: true });
+  $("#completionModal").close();
+  if ($("#taskDetailModal").open) $("#taskDetailModal").close();
+  render();
+  const result = await cloudSave;
+  if (result?.ok) toast("Completion confirmed and synced.");
+  else if (result?.reason === "not-connected") toast("Completion confirmed locally. Connect cloud sync to share it.");
+  else toast("Completion confirmed locally; cloud sync is still pending.");
+}
 function confirmChild(taskId, index) { const task = state.tasks.find((item) => item.id === taskId); const child = task?.children?.[index]; if (!child) return; child.progress = 100; child.status = "pending_confirmation"; saveState(); openCompletionPrompt(taskId, index); }
 async function saveTaskChanges() {
   const task = state.tasks.find((item) => item.id === currentDetailTaskId);
@@ -586,10 +659,47 @@ async function saveTaskChanges() {
   else toast(`Saved locally, but cloud sync failed: ${result?.message || "check your connection"}.`);
 }
 
-function setTaskProgress(taskId, progress) { const task = state.tasks.find((item) => item.id === taskId); if (!task) return; const wasOpen = $("#taskDetailModal").open; if (wasOpen) $("#taskDetailModal").close(); if (task.type === "regular" && task.children?.length) task.progressOverride = progress; task.progress = progress; task.status = progress >= 100 ? "pending_confirmation" : progress > 0 ? "in_progress" : "not_started"; saveState(); render(); if (progress >= 100) openCompletionPrompt(taskId); else { openTaskDetail(taskId, wasOpen); toast(`Progress updated to ${progress}%.`); } }
-function elapsedLabel(task) { const minutes = Math.max(0, Math.floor((Date.now() - task.timerStartedAt) / 60000)); return `${String(Math.floor(minutes / 60)).padStart(2, "0")}h ${String(minutes % 60).padStart(2, "0")}m`; }
+async function setTaskProgress(taskId, progress) {
+  const task = state.tasks.find((item) => item.id === taskId);
+  if (!task) return;
+  const wasOpen = $("#taskDetailModal").open;
+  if (wasOpen) $("#taskDetailModal").close();
+  if (task.type === "regular" && task.children?.length) task.progressOverride = progress;
+  task.progress = progress;
+  task.status = progress >= 100 ? "pending_confirmation" : progress > 0 ? "in_progress" : "not_started";
+  const cloudSave = saveState({ immediate: true });
+  render();
+  if (progress >= 100) openCompletionPrompt(taskId);
+  else {
+    openTaskDetail(taskId, wasOpen);
+    toast(`Progress updated to ${progress}%.`);
+  }
+  const result = await cloudSave;
+  if (!result?.ok && result?.reason === "cloud-error") toast(`Progress saved locally; cloud sync failed: ${result.message || "check your connection"}.`);
+}
+function trackedSeconds(task) { return Math.max(0, Number(task.actualSeconds || (Number(task.actualMinutes || 0) * 60)) + (task.timerStartedAt ? Math.floor((Date.now() - task.timerStartedAt) / 1000) : 0)); }
+function trackedMinutes(task) { return Math.floor(trackedSeconds(task) / 60); }
+function elapsedLabel(task) { const seconds = trackedSeconds(task); return `${String(Math.floor(seconds / 3600)).padStart(2, "0")}h ${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}m ${String(seconds % 60).padStart(2, "0")}s`; }
 function timerLabel(task) { return task.timerStartedAt ? `Running · ${elapsedLabel(task)}` : "Start timer"; }
-function toggleTimer(taskId) { const task = state.tasks.find((item) => item.id === taskId); if (!task) return; if (task.timerStartedAt) { task.actualMinutes = (task.actualMinutes || 0) + Math.max(1, Math.round((Date.now() - task.timerStartedAt) / 60000)); delete task.timerStartedAt; toast("Timer paused · tracked time saved."); } else { task.timerStartedAt = Date.now(); task.status = task.status === "not_started" ? "in_progress" : task.status; toast("Timer started · this task is now running."); } saveState(); render(); }
+async function toggleTimer(taskId) {
+  const task = state.tasks.find((item) => item.id === taskId);
+  if (!task) return;
+  const wasRunning = Boolean(task.timerStartedAt);
+  if (wasRunning) {
+    task.actualSeconds = trackedSeconds(task);
+    task.actualMinutes = Math.floor(task.actualSeconds / 60);
+    delete task.timerStartedAt;
+  } else {
+    task.actualSeconds = Number(task.actualSeconds || (Number(task.actualMinutes || 0) * 60));
+    task.timerStartedAt = Date.now();
+    task.status = task.status === "not_started" ? "in_progress" : task.status;
+  }
+  const cloudSave = saveState({ immediate: true });
+  render();
+  toast(wasRunning ? `Timer paused · ${task.actualMinutes || 0} min tracked.` : "Timer started · the counter is running.");
+  const result = await cloudSave;
+  if (!result?.ok && result?.reason === "cloud-error") toast(`Timer saved locally; cloud sync failed: ${result.message || "check your connection"}.`);
+}
 function checkHabit(habitId) { const habit = state.habits.find((item) => item.id === habitId); if (!habit) return; habit.checkins ||= []; const today = todayIso(); if (habit.checkins.includes(today)) return; habit.checkins.push(today); saveState(); render(); toast(`${habit.name} checked in for today.`); }
 
 function openTaskModal() { const form = $("#taskForm"); form.reset(); form.elements.scheduledDate.value = selectedDate; $("#taskModal").showModal(); }
@@ -663,12 +773,9 @@ async function signOutCloud() {
   toast("Cloud sync disconnected. Local data remains on this device.");
 }
 
-$("#newTaskButton").addEventListener("click", openTaskModal);
-$("#newEventButton").addEventListener("click", () => openEventDetail());
 $("#taskForm").addEventListener("submit", createTask);
 $("#eventForm").addEventListener("submit", saveEventForm);
 $("#deleteEventButton").addEventListener("click", deleteEvent);
-$("#importCourseButton").addEventListener("click", () => $("#courseFileInput").click());
 $("#courseFileInput").addEventListener("change", (event) => { if (event.target.files[0]) importCourseFile(event.target.files[0]); event.target.value = ""; });
 $("#confirmImportButton").addEventListener("click", (event) => { event.preventDefault(); commitCourseImport(); });
 $("#saveTaskButton").addEventListener("click", saveTaskChanges);
@@ -684,12 +791,17 @@ $("#authSignOutButton").addEventListener("click", signOutCloud);
 $("#previousDay").addEventListener("click", () => { const date = parseDate(selectedDate); date.setDate(date.getDate() - 1); selectedDate = isoDate(date); render(); });
 $("#nextDay").addEventListener("click", () => { const date = parseDate(selectedDate); date.setDate(date.getDate() + 1); selectedDate = isoDate(date); render(); });
 $("#jumpToday").addEventListener("click", () => { selectedDate = todayIso(); render(); });
-$("#showIncomplete").addEventListener("click", () => { const incomplete = state.tasks.filter((task) => task.status !== "done" && task.type !== "long-term"); toast(`${incomplete.length} incomplete task${incomplete.length === 1 ? "" : "s"} across your workspace.`); });
+$("#showIncomplete").addEventListener("click", () => { showIncompleteOnly = !showIncompleteOnly; render(); });
 $("#exportData").addEventListener("click", exportData);
 $("#menuTrigger").addEventListener("click", () => { $("#sidebar").classList.add("open"); $("#scrim").classList.add("open"); });
 $("#sidebarClose").addEventListener("click", closeSidebar); $("#scrim").addEventListener("click", closeSidebar);
 $("#insightClose").addEventListener("click", () => $("#insightColumn").classList.remove("open"));
-$("#insightTrigger").addEventListener("click", () => $("#insightColumn").classList.add("open"));
+function closeActionMenus() { $("#newMenu").hidden = true; $("#viewMenu").hidden = true; $("#newMenuButton").setAttribute("aria-expanded", "false"); $("#viewMenuButton").setAttribute("aria-expanded", "false"); }
+$("#newMenuButton").addEventListener("click", (event) => { event.stopPropagation(); const menu = $("#newMenu"); const next = menu.hidden; closeActionMenus(); menu.hidden = !next; $("#newMenuButton").setAttribute("aria-expanded", String(next)); });
+$("#viewMenuButton").addEventListener("click", (event) => { event.stopPropagation(); const menu = $("#viewMenu"); const next = menu.hidden; closeActionMenus(); menu.hidden = !next; $("#viewMenuButton").setAttribute("aria-expanded", String(next)); });
+$("#insightTrigger").addEventListener("click", () => { closeActionMenus(); $("#insightColumn").classList.add("open"); });
+$$(`[data-new-action]`).forEach((button) => button.addEventListener("click", () => { closeActionMenus(); if (button.dataset.newAction === "task") openTaskModal(); if (button.dataset.newAction === "event") openEventDetail(); if (button.dataset.newAction === "course") $("#courseFileInput").click(); }));
+window.addEventListener("click", closeActionMenus);
 $$('.nav-item').forEach((item) => item.addEventListener("click", () => { currentView = item.dataset.view; currentTab = currentView === "assignment" ? "board" : "today"; $$(".nav-item").forEach((nav) => nav.classList.toggle("active", nav === item)); if (currentView === "assignment") { $("#pageTitle").textContent = "Assignment and goal"; } else { $("#pageTitle").textContent = placeholderText(currentView).title; } resetPageScroll(); render(); closeSidebar(); }));
 $$('.view-tab').forEach((tab) => tab.addEventListener("click", () => { currentTab = tab.dataset.tab; resetPageScroll(); renderActiveTab(); }));
 window.addEventListener("keydown", (event) => { if (event.key === "Escape") closeSidebar(); });
@@ -698,5 +810,19 @@ window.addEventListener("online", async () => { if (cloudSession) await hydrateS
 function closeSidebar() { $("#sidebar").classList.remove("open"); $("#scrim").classList.remove("open"); }
 function resetPageScroll() { window.scrollTo({ top: 0, left: 0, behavior: "auto" }); document.documentElement.scrollTop = 0; document.body.scrollTop = 0; $(".main-column")?.scrollTo({ top: 0, left: 0, behavior: "auto" }); }
 
+function refreshRunningTimers() {
+  if (!state.tasks.some((task) => task.timerStartedAt)) return;
+  $$(`[data-start-task], [data-detail-timer]`).forEach((button) => {
+    const task = state.tasks.find((item) => item.id === button.dataset.startTask || item.id === button.dataset.detailTimer);
+    if (!task) return;
+    button.classList.toggle("running", Boolean(task.timerStartedAt));
+    button.textContent = timerLabel(task);
+  });
+  $$(`[data-timer-minutes]`).forEach((element) => {
+    const task = state.tasks.find((item) => item.id === element.dataset.timerMinutes);
+    if (task) element.textContent = `${trackedMinutes(task)} min tracked`;
+  });
+}
+window.setInterval(refreshRunningTimers, 1000);
 render();
 initCloudSync();
