@@ -51,14 +51,7 @@
           </div>
           <div class="topbar-actions">
             <input id="courseFileInput" type="file" accept="application/json,.json" hidden />
-            <div class="action-menu-wrap">
-              <button class="primary-button" id="newMenuButton" aria-haspopup="true" aria-expanded="false">+ New</button>
-              <div class="action-menu" id="newMenu" hidden>
-                <button type="button" data-new-action="task">New task</button>
-                <button type="button" data-new-action="event">New event</button>
-                <button type="button" data-new-action="course">Import timetable</button>
-              </div>
-            </div>
+            <button class="primary-button" id="newMenuButton" type="button" aria-haspopup="dialog" aria-controls="newActionSheet" aria-expanded="false">+ New</button>
             <div class="action-menu-wrap">
               <button class="secondary-button" id="viewMenuButton" aria-haspopup="true" aria-expanded="false">View</button>
               <div class="action-menu" id="viewMenu" hidden>
@@ -177,6 +170,32 @@
       </form>
     </dialog>
 
+    <dialog class="modal new-action-sheet" id="newActionSheet">
+      <form method="dialog">
+        <div class="modal-header">
+          <div><div class="section-kicker">CREATE</div><h2>Start something new</h2></div>
+          <button class="icon-button" value="cancel" formnovalidate aria-label="Close">×</button>
+        </div>
+        <div class="new-action-options">
+          <button type="button" class="new-action-option" data-new-action="task">
+            <span class="new-action-option-title">New Task</span>
+            <span class="new-action-option-help">Capture one next step.</span>
+          </button>
+          <button type="button" class="new-action-option" data-new-action="event">
+            <span class="new-action-option-title">New Event</span>
+            <span class="new-action-option-help">Block time on the calendar.</span>
+          </button>
+          <button type="button" class="new-action-option" data-new-action="course">
+            <span class="new-action-option-title">Import Course</span>
+            <span class="new-action-option-help">Load a timetable JSON file.</span>
+          </button>
+        </div>
+        <div class="modal-actions">
+          <button class="secondary-button" value="cancel" formnovalidate>Close</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog class="modal wide-modal" id="taskDetailModal">
       <form method="dialog" id="taskDetailForm">
         <div class="modal-header"><div><div class="section-kicker">TASK DETAIL</div><h2 id="detailTitle">Task</h2></div><div class="modal-header-actions"><button class="detail-edit-button" id="editTaskButton" type="button">Edit</button><button class="icon-button" value="cancel" formnovalidate aria-label="关闭">×</button></div></div>
@@ -191,6 +210,7 @@
         <label>Title<input id="eventTitle" name="title" required maxlength="120" placeholder="例如：项目访谈、讲座、会议" /></label>
         <div class="form-grid"><label>Date<input id="eventDate" name="date" type="date" required /></label><label>Color<select id="eventColor" name="color"><option value="#E8DCD1">Oatmeal · event</option><option value="#D4A5A5">Dusty rose</option><option value="#D7C4D7">Taro purple</option><option value="#B8C4D0">Mist blue</option></select></label><label>Start time<input id="eventStart" name="start" type="time" required /></label><label>End time<input id="eventEnd" name="end" type="time" required /></label></div>
         <label>Notes<textarea id="eventNotes" name="notes" rows="3" placeholder="可选"></textarea></label>
+        <label class="event-important-toggle"><input id="eventImportant" name="important" type="checkbox" /><span>Mark as important day</span></label>
         <div class="modal-actions"><button class="secondary-button" value="cancel" formnovalidate>Close</button><button class="detail-inline-button danger-button" id="deleteEventButton" type="button" hidden>Delete event</button><button class="primary-button" value="default">Save event</button></div>
       </form>
     </dialog>

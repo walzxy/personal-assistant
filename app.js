@@ -159,7 +159,7 @@ function saveState({ immediate = true } = {}) {
 function setSyncStatus(message, tone = "local") {
   const element = $("#syncStatus");
   if (!element) return;
-  element.innerHTML = `<span class="status-dot ${tone}"></span> ${escapeHtml(message)}`;
+  element.innerHTML = `<span class="status-dot ${tone}"></span><span class="storage-status-text">${escapeHtml(message)}</span>`;
 }
 
 function updateCloudControls() {
@@ -176,7 +176,8 @@ function updateCloudControls() {
     if (submit) submit.disabled = false;
     const identity = cloudSession.user.email || cloudSession.user.app_metadata?.provider || "account";
     const hasPending = Boolean(readPendingCloudState());
-    setSyncStatus(cloudSyncReady ? (hasPending ? `Pending local changes · ${identity}` : `Cloud ready · ${identity}`) : cloudSyncError || "Connecting to cloud…", cloudSyncReady && !hasPending ? "cloud" : cloudSyncError ? "error" : "pending");
+    const syncLabel = cloudSyncReady ? (hasPending ? "Pending local changes" : "Cloud ready") : cloudSyncError || "Connecting to cloud…";
+    setSyncStatus(`${syncLabel} · ${identity}`, cloudSyncReady && !hasPending ? "cloud" : cloudSyncError ? "error" : "pending");
   } else {
     button.textContent = "Connect cloud sync";
     if (signOut) signOut.hidden = true;
@@ -344,19 +345,24 @@ function formatEnglishDate(value, options = { month: "short", day: "numeric" }) 
 function formatShortDate(value) { return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(parseDate(value)); }
 function difficultyWeight(task) { return Number(task.estimateHours || 0) * (DIFFICULTY[task.difficulty] || 1); }
 function isTaskCompleted(task) { return task.status === "done"; }
+function deriveLongTermProgress(task) {
+  if (task?.type !== "long-term") return clampProgress(task?.progress);
+  const children = Array.isArray(task.children) ? task.children : [];
+  if (!children.length) return 0;
+  const totalEstimatedHours = Math.max(.25, Number(task.estimateHours) || children.reduce((sum, child) => sum + Math.max(.25, Number(child.estimateHours) || 0), 0));
+  const completedEstimatedHours = children.reduce((sum, child) => child.status === "done" ? sum + Math.max(.25, Number(child.estimateHours) || 0) : sum, 0);
+  return Math.round(Math.min(100, completedEstimatedHours / totalEstimatedHours * 100));
+}
 function progressForTask(task) {
+  if (task.type === "long-term") return deriveLongTermProgress(task);
   if (task.status === "done") return 100;
-  if (task.type === "long-term") {
-    const children = task.children || [];
-    return children.length ? Math.round(children.filter((child) => child.status === "done").length / children.length * 100) : 0;
-  }
   if (task.children?.length && task.progressOverride == null) return Math.round(task.children.filter((child) => child.status === "done").length / task.children.length * 100);
   if (task.progressOverride != null) return Math.max(0, Math.min(100, Number(task.progressOverride)));
   return Math.max(0, Math.min(100, Number(task.progress || 0)));
 }
 function taskColor(task) { return task.tagColor || DEFAULT_TAG_COLOR[task.type] || DEFAULT_TAG_COLOR.subtask; }
 function hexToRgba(hex, alpha = 0.1) { const clean = hex.replace("#", ""); const value = clean.length === 3 ? clean.split("").map((part) => part + part).join("") : clean; const number = Number.parseInt(value, 16); return `rgba(${number >> 16}, ${(number >> 8) & 255}, ${number & 255}, ${alpha})`; }
-function taskStatusLabel(task) { return task.status === "done" ? "Completed" : task.status === "pending_confirmation" ? "Confirm completion" : task.status === "in_progress" ? "In progress" : "Not started"; }
+function taskStatusLabel(task) { const progress = task.type === "long-term" ? deriveLongTermProgress(task) : taskProgress(task); return progress >= 100 ? "Completed" : progress > 0 ? "In progress" : "Not started"; }
 
 function dateKey(value) {
   if (!value) return "";
@@ -540,7 +546,7 @@ function renderTasks() {
 function renderLongTerm() {
   const tasks = state.tasks.filter((task) => task.type === "long-term");
   if (!tasks.length) { $("#longTermList").innerHTML = `<div class="empty-state">Long-term projects will appear here when you create one.</div>`; return; }
-  $("#longTermList").innerHTML = tasks.map((task) => { const progress = progressForTask(task); const completeButton = task.status === "done" ? "" : `<button class="complete-button" data-complete-task="${task.id}" type="button">Complete</button>`; return `<article class="long-term-card" data-open-task="${task.id}" style="--task-color:${taskColor(task)};--task-tint:${hexToRgba(taskColor(task))}"><div class="task-card-top"><div><div class="task-card-title"><span class="task-color-dot"></span>${escapeHtml(task.title)}</div><div class="task-card-meta">${(task.children || []).filter((child) => child.status === "done").length} / ${(task.children || []).length} subtasks</div></div><span class="status-pill ${task.status === "done" ? "done" : ""}">${progress}%</span></div><div class="progress-row">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div><div class="task-footer"><span>${trackedMinutes(task)} min focused</span>${completeButton}</div></article>`; }).join("");
+  $("#longTermList").innerHTML = tasks.map((task) => { const progress = progressForTask(task); const completeButton = ""; const status = progress >= 100 ? "done" : progress > 0 ? "in_progress" : ""; return `<article class="long-term-card" data-open-task="${task.id}" style="--task-color:${taskColor(task)};--task-tint:${hexToRgba(taskColor(task))}"><div class="task-card-top"><div><div class="task-card-title"><span class="task-color-dot"></span>${escapeHtml(task.title)}</div><div class="task-card-meta">${(task.children || []).filter((child) => child.status === "done").length} / ${(task.children || []).length} subtasks</div></div><span class="status-pill ${status}">${progress}%</span></div><div class="progress-row">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div><div class="task-footer"><span>${trackedMinutes(task)} min focused</span>${completeButton}</div></article>`; }).join("");
   $("#longTermList").querySelectorAll("[data-open-task]").forEach((card) => card.addEventListener("click", (event) => { if (!event.target.closest("button")) openTaskDetail(card.dataset.openTask); }));
   $("#longTermList").querySelectorAll("[data-complete-task]").forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); completeTask(button.dataset.completeTask); }));
 }
@@ -622,15 +628,15 @@ function bindBoardView() {
   $("#boardView")?.querySelectorAll("[data-complete-task]").forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); completeTask(button.dataset.completeTask, button.dataset.completeChild || null); }));
 }
 
-const WEEK_DAY_START = 0;
+const WEEK_DAY_START = 6 * 60;
 const WEEK_DAY_END = 24 * 60;
 const WEEK_HOUR_HEIGHT = 80;
 function timeToMinutes(value) { if (!value) return null; const [hours, minutes] = value.split(":").map(Number); return hours * 60 + minutes; }
 function minutesToTime(value) { const minutes = Math.max(0, Math.round(value)); return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`; }
 function eventOccurrencesForDate(date) { const targetDate = dateKey(date); return (state.events || []).filter((event) => dateKey(event.date) === targetDate && event.start && event.end).map((event) => ({ ...event, date: targetDate, kind: "event", name: event.name || event.title || "Event" })); }
 let currentEventId = null;
-function openEventDetail(eventId = null) { const event = (state.events || []).find((item) => item.id === eventId); currentEventId = event?.id || null; $("#eventModalTitle").textContent = event ? "Edit event" : "Add an event"; $("#eventTitle").value = event?.name || event?.title || ""; $("#eventDate").value = event?.date || selectedDate; $("#eventStart").value = event?.start || "09:00"; $("#eventEnd").value = event?.end || "10:00"; $("#eventColor").value = event?.color || "#E8DCD1"; $("#eventNotes").value = event?.notes || ""; $("#deleteEventButton").hidden = !event; $("#eventModal").showModal(); }
-function saveEventForm(event) { event.preventDefault(); if (event.submitter?.value === "cancel") { $("#eventModal").close(); currentEventId = null; return; } const title = $("#eventTitle").value.trim(); const date = $("#eventDate").value; const start = $("#eventStart").value; const end = $("#eventEnd").value; if (!title || !date || !start || !end) return; if (timeToMinutes(end) <= timeToMinutes(start)) { toast("End time must be after start time."); return; } const wasEditing = Boolean(currentEventId); state.events ||= []; const record = { id: currentEventId || uid("event"), name: title, title, date, start, end, color: $("#eventColor").value, notes: $("#eventNotes").value.trim(), kind: "event" }; if (currentEventId) { const index = state.events.findIndex((item) => item.id === currentEventId); if (index >= 0) state.events[index] = { ...state.events[index], ...record }; } else state.events.push(record); saveState(); $("#eventModal").close(); selectedDate = date; currentTab = "week"; render(); toast(wasEditing ? "Event updated." : "Event added."); currentEventId = null; }
+function openEventDetail(eventId = null) { const event = (state.events || []).find((item) => item.id === eventId); currentEventId = event?.id || null; $("#eventModalTitle").textContent = event ? "Edit event" : "Add an event"; $("#eventTitle").value = event?.name || event?.title || ""; $("#eventDate").value = event?.date || selectedDate; $("#eventStart").value = event?.start || "09:00"; $("#eventEnd").value = event?.end || "10:00"; $("#eventColor").value = event?.color || "#E8DCD1"; $("#eventNotes").value = event?.notes || ""; $("#eventImportant").checked = Boolean(event?.important); $("#deleteEventButton").hidden = !event; $("#eventModal").showModal(); }
+function saveEventForm(event) { event.preventDefault(); if (event.submitter?.value === "cancel") { $("#eventModal").close(); currentEventId = null; return; } const title = $("#eventTitle").value.trim(); const date = $("#eventDate").value; const start = $("#eventStart").value; const end = $("#eventEnd").value; if (!title || !date || !start || !end) return; if (timeToMinutes(end) <= timeToMinutes(start)) { toast("End time must be after start time."); return; } const wasEditing = Boolean(currentEventId); state.events ||= []; const record = { id: currentEventId || uid("event"), name: title, title, date, start, end, color: $("#eventColor").value, notes: $("#eventNotes").value.trim(), important: $("#eventImportant").checked, kind: "event" }; if (currentEventId) { const index = state.events.findIndex((item) => item.id === currentEventId); if (index >= 0) state.events[index] = { ...state.events[index], ...record }; } else state.events.push(record); saveState(); $("#eventModal").close(); selectedDate = date; currentTab = currentTab === "month" ? "month" : "week"; render(); toast(wasEditing ? "Event updated." : "Event added."); currentEventId = null; }
 function deleteEvent() { if (!currentEventId) return; const event = state.events.find((item) => item.id === currentEventId); if (!event) return; state.events = state.events.filter((item) => item.id !== currentEventId); saveState(); $("#eventModal").close(); currentEventId = null; render(); toast("Event deleted."); }
 function weeklyEntriesForDate(date) {
   const targetDate = dateKey(date);
@@ -694,20 +700,26 @@ function weekBlockStyle(item) {
   const width = 100 / item.laneCount;
   return `top:${top}px;height:${height}px;left:${item.lane * width}%;width:${width}%;background:${item.entry.color};`;
 }
+function weekEventLabel(title, durationMinutes) {
+  if (durationMinutes <= 45) return "";
+  const value = Array.from(String(title || "").trim()).slice(0, 4).join("");
+  return `<span class="week-event-label">${escapeHtml(value)}${String(title || "").trim().length > 4 ? "..." : ""}</span>`;
+}
 function renderWeekDayColumn(date) {
   const targetDate = dateKey(date);
   const entries = weeklyEntriesForDate(targetDate);
   const blocks = layoutWeekEntries(entries).map((item) => {
     const { entry } = item;
     const label = `${entry.title}, ${entry.startLabel} to ${entry.endLabel}`;
-    return `<button type="button" class="week-event-block ${entry.kind}-block" data-week-event data-week-date="${targetDate}" data-week-entry-id="${escapeHtml(entry.id)}" aria-label="${escapeHtml(label)}" style="${weekBlockStyle(item)}"><span class="week-event-swatch" aria-hidden="true"></span></button>`;
+    return `<button type="button" class="week-event-block ${entry.kind}-block" data-week-event data-week-date="${targetDate}" data-week-entry-id="${escapeHtml(entry.id)}" aria-label="${escapeHtml(label)}" style="${weekBlockStyle(item)}"><span class="week-event-swatch" aria-hidden="true"></span>${weekEventLabel(entry.title, entry.end - entry.start)}</button>`;
   }).join("");
-  return `<div class="week-day-column-fixed" data-week-date="${targetDate}"><div class="week-day-track-fixed">${blocks}${entries.length ? "" : `<span class="week-day-empty" aria-hidden="true"></span>`}</div></div>`;
+  const trackHeight = (WEEK_DAY_END - WEEK_DAY_START) / 60 * WEEK_HOUR_HEIGHT;
+  return `<div class="week-day-column-fixed" data-week-date="${targetDate}"><div class="week-day-track-fixed" style="height:${trackHeight}px">${blocks}${entries.length ? "" : `<span class="week-day-empty" aria-hidden="true"></span>`}</div></div>`;
 }
 function renderWeekView() {
   const days = weekDatesFor(selectedDate);
   const dayHeaders = days.map((date) => `<div class="week-day-header-fixed"><strong>${DAY_NAMES[parseDate(date).getDay()].slice(0, 3)}</strong><span>${formatShortDate(date)}</span></div>`).join("");
-  const timeLabels = Array.from({ length: 25 }, (_, hour) => `<span style="top:${hour * WEEK_HOUR_HEIGHT}px">${String(hour).padStart(2, "0")}:00</span>`).join("");
+  const timeLabels = Array.from({ length: 19 }, (_, index) => { const hour = WEEK_DAY_START / 60 + index; return `<span style="top:${index * WEEK_HOUR_HEIGHT}px">${String(hour).padStart(2, "0")}:00</span>`; }).join("");
   return `<div class="section-heading week-view-heading"><div><div class="section-kicker">WEEK VIEW</div><h2>${formatDate(days[0], { month: "short", day: "numeric" })} — ${formatDate(days[6], { month: "short", day: "numeric" })}</h2></div><div class="calendar-nav week-nav"><button class="secondary-button" id="weekPrev" aria-label="Previous week">‹</button><button class="secondary-button" id="weekToday">Today</button><button class="secondary-button" id="weekNext" aria-label="Next week">›</button></div></div><div class="week-fixed-card"><div class="week-fixed-header"><div class="week-time-corner"></div><div class="week-day-headers">${dayHeaders}</div></div><div class="week-fixed-body"><div class="week-time-rail">${timeLabels}</div><div class="week-fixed-columns">${days.map(renderWeekDayColumn).join("")}</div></div></div>`;
 }
 function openWeekEventSheet(date, entryId) {
@@ -729,7 +741,71 @@ function monthHeatmapData() { const date = parseDate(selectedDate); const year =
 function heatClass(progress) { if (progress == null || progress === 0) return "empty"; if (progress < 30) return "red"; if (progress < 60) return "yellow"; return "green"; }
 function renderHeatmapView() { const { year, month, days } = monthHeatmapData(); const firstOffset = (new Date(year, month, 1).getDay() + 6) % 7; const cells = [...Array(firstOffset).fill(null), ...days]; return `<div class="section-heading"><div><div class="section-kicker">DAILY PROGRESS</div><h2>Task heatmap · ${year} / ${String(month + 1).padStart(2, "0")}</h2><p class="heatmap-description">Each square reads the saved daily weighted progress. Empty days stay out of the average.</p></div><div class="calendar-nav"><button class="secondary-button" id="heatPrev">‹ Month</button><button class="secondary-button" id="heatNext">Month ›</button></div></div><div class="heatmap-card"><div class="heatmap-weekdays">${DAY_NAMES.slice(1).concat(DAY_NAMES[0]).map((day) => `<span>${day.slice(0, 3)}</span>`).join("")}</div><div class="heatmap-month-grid">${cells.map((cell) => cell ? `<button class="heat-cell ${heatClass(cell.progress)}" data-heat-date="${cell.iso}" data-heat-progress="${cell.progress == null ? "N/A" : `${cell.progress}%`}" aria-label="${cell.iso} ${cell.progress == null ? "no tasks" : `${cell.progress}%`}"><span>${cell.day}</span></button>` : `<span class="heat-cell blank" aria-hidden="true"></span>`).join("")}</div><div class="heatmap-legend"><span><i class="heat-swatch empty"></i>No tasks</span><span><i class="heat-swatch red"></i>0–30%</span><span><i class="heat-swatch yellow"></i>30–60%</span><span><i class="heat-swatch green"></i>60–100%</span></div><div class="heat-tooltip" id="heatTooltip" role="status"></div></div>`; }
 function bindHeatmapView() { const card = $(".heatmap-card"); const tooltip = $("#heatTooltip"); if (!card || !tooltip) return; $$(`[data-heat-date]`).forEach((cell) => { cell.addEventListener("mouseenter", () => { tooltip.textContent = `${cell.dataset.heatDate} · ${cell.dataset.heatProgress}`; tooltip.classList.add("show"); }); cell.addEventListener("mousemove", (event) => { const rect = card.getBoundingClientRect(); tooltip.style.left = `${event.clientX - rect.left + 12}px`; tooltip.style.top = `${event.clientY - rect.top + 12}px`; }); cell.addEventListener("mouseleave", () => tooltip.classList.remove("show")); }); $("#heatPrev")?.addEventListener("click", () => { const date = parseDate(selectedDate); date.setMonth(date.getMonth() - 1); selectedDate = isoDate(date); render(); }); $("#heatNext")?.addEventListener("click", () => { const date = parseDate(selectedDate); date.setMonth(date.getMonth() + 1); selectedDate = isoDate(date); render(); }); }
-function bindMonthView() { $$(`[data-month-date]`).forEach((cell) => cell.addEventListener("click", () => { selectedDate = cell.dataset.monthDate; currentTab = "today"; resetPageScroll(); render(); })); }
+function monthAgendaEntries(date) {
+  const targetDate = dateKey(date);
+  const taskEntries = tasksForDate(targetDate).map((task) => ({
+    id: task.id,
+    ownerId: task.parentId || task.id,
+    title: task.title,
+    time: detailTimeLabel(task.startTime, task.endTime),
+    sortTime: timeToMinutes(task.startTime),
+    color: taskColor(task),
+    category: TYPE_LABEL[task.type] || "Task",
+    kind: "task",
+    important: false,
+  }));
+  const eventEntries = eventOccurrencesForDate(targetDate).map((event) => ({
+    id: event.id,
+    ownerId: event.id,
+    title: event.name || event.title || "Event",
+    time: detailTimeLabel(event.start, event.end),
+    sortTime: timeToMinutes(event.start),
+    color: event.color || "#E8DCD1",
+    category: "Event",
+    kind: "event",
+    important: Boolean(event.important),
+  }));
+  const courseEntries = courseOccurrencesForDate(targetDate).map((course) => ({
+    id: `course:${course.id}`,
+    ownerId: course.id,
+    title: course.name || course.title || "Course",
+    time: detailTimeLabel(course.start, course.end),
+    sortTime: timeToMinutes(course.start),
+    color: "#CDBBA0",
+    category: "Course",
+    kind: "course",
+    important: false,
+  }));
+  return [...eventEntries, ...taskEntries, ...courseEntries].sort((a, b) => Number(b.important) - Number(a.important) || (a.sortTime ?? 1440) - (b.sortTime ?? 1440) || a.title.localeCompare(b.title));
+}
+function shiftMonth(amount) {
+  const current = parseDate(selectedDate);
+  const day = current.getDate();
+  current.setDate(1);
+  current.setMonth(current.getMonth() + amount);
+  const lastDay = new Date(current.getFullYear(), current.getMonth() + 1, 0).getDate();
+  current.setDate(Math.min(day, lastDay));
+  selectedDate = isoDate(current);
+  render();
+}
+function renderMonthAgenda(date) {
+  const entries = monthAgendaEntries(date);
+  const importantDay = entries.some((entry) => entry.important);
+  const cards = entries.map((entry) => `<button type="button" class="agenda-card ${entry.important ? "important" : ""}" style="--agenda-color:${entry.color}" data-agenda-kind="${entry.kind}" data-agenda-id="${escapeHtml(entry.id)}" data-agenda-owner="${escapeHtml(entry.ownerId)}" data-agenda-date="${date}"><span class="agenda-card-copy"><strong>${entry.important ? "★ " : ""}${escapeHtml(entry.title)}</strong><span>${escapeHtml(entry.time)}</span></span><span class="agenda-card-category">${escapeHtml(entry.category)}</span></button>`).join("");
+  return `<section class="month-agenda"><div class="month-agenda-header"><div><div class="section-kicker">AGENDA</div><h3>${formatEnglishDate(date, { month: "long", day: "numeric", year: "numeric" })}${importantDay ? " · Important day" : ""}</h3></div><button class="primary-button month-add-event" id="monthAddEvent" type="button">+ Add Event for this day</button></div><div class="agenda-list">${cards || `<div class="agenda-empty">No scheduled items for this day.</div>`}</div></section>`;
+}
+function bindMonthView() {
+  $$(`[data-month-date]`).forEach((cell) => cell.addEventListener("click", () => { selectedDate = cell.dataset.monthDate; render(); }));
+  $("#monthPrev")?.addEventListener("click", () => shiftMonth(-1));
+  $("#monthNext")?.addEventListener("click", () => shiftMonth(1));
+  $("#monthToday")?.addEventListener("click", () => { selectedDate = todayIso(); render(); });
+  $("#monthAddEvent")?.addEventListener("click", () => openEventDetail());
+  $$(`[data-agenda-kind]`).forEach((card) => card.addEventListener("click", () => {
+    if (card.dataset.agendaKind === "event") openEventDetail(card.dataset.agendaOwner);
+    if (card.dataset.agendaKind === "task") openTaskDetail(card.dataset.agendaOwner);
+    if (card.dataset.agendaKind === "course") openWeekEventSheet(card.dataset.agendaDate, card.dataset.agendaId);
+  }));
+}
 
 // Reserved extension point for anniversaries, birthdays and mood notes.
 const monthAnnotations = { anniversaries: [], birthdays: [], moods: [] };
@@ -737,10 +813,10 @@ function renderMonthView() {
   const date = parseDate(selectedDate); const year = date.getFullYear(); const month = date.getMonth(); const first = new Date(year, month, 1); const last = new Date(year, month + 1, 0); const start = (first.getDay() + 6) % 7;
   const cells = []; for (let i = 0; i < start; i++) cells.push(`<div class="calendar-cell muted" aria-hidden="true"></div>`);
   for (let i = 1; i <= last.getDate(); i++) {
-    const d = new Date(year, month, i); const iso = isoDate(d); const hardTasks = tasksForDate(iso).filter((task) => task.difficulty === "hard"); const events = eventOccurrencesForDate(iso); const markers = [...events.map((event) => ({ color: event.color || "#E8DCD1", label: event.name || event.title || "Event" })), ...hardTasks.map((task) => ({ color: taskColor(task), label: task.title }))];
-    cells.push(`<button type="button" class="calendar-cell ${iso === selectedDate ? "today" : ""}" data-month-date="${iso}" aria-label="Open ${formatDate(iso)}"><strong>${i}</strong><span class="month-dots">${markers.slice(0, 5).map((marker) => `<i class="month-dot" style="--dot-color:${marker.color}" title="${escapeHtml(marker.label)}"></i>`).join("")}</span></button>`);
+    const d = new Date(year, month, i); const iso = isoDate(d); const hardTasks = tasksForDate(iso).filter((task) => task.difficulty === "hard"); const events = eventOccurrencesForDate(iso); const markers = [...events.map((event) => ({ color: event.color || "#E8DCD1", label: event.name || event.title || "Event" })), ...hardTasks.map((task) => ({ color: taskColor(task), label: task.title }))]; const important = events.some((event) => event.important);
+    cells.push(`<button type="button" class="calendar-cell month-cell ${iso === todayIso() ? "today" : ""} ${iso === selectedDate ? "selected" : ""} ${important ? "important-day" : ""}" data-month-date="${iso}" aria-label="Open ${formatDate(iso)}"><strong>${i}</strong>${important ? `<span class="month-important-mark" aria-label="Important day">★</span>` : ""}<span class="month-dots">${markers.slice(0, 5).map((marker) => `<i class="month-dot" style="--dot-color:${marker.color}" title="${escapeHtml(marker.label)}"></i>`).join("")}</span></button>`);
   }
-  return `<div class="section-heading"><div><div class="section-kicker">MONTH VIEW</div><h2>${formatDate(`${year}-${String(month + 1).padStart(2, "0")}-01`, { month: "long", year: "numeric" })}</h2></div></div><div class="calendar-card"><div class="calendar-grid">${DAY_NAMES.map((day) => `<div class="calendar-day-name">${day.slice(0, 3)}</div>`).join("")}${cells.join("")}</div></div>`;
+  return `<div class="section-heading month-view-heading"><div><div class="section-kicker">MONTH VIEW</div><h2>${formatDate(`${year}-${String(month + 1).padStart(2, "0")}-01`, { month: "long", year: "numeric" })}</h2></div><div class="calendar-nav month-nav"><button class="secondary-button" id="monthPrev" aria-label="Previous month">‹</button><button class="secondary-button" id="monthToday">Today</button><button class="secondary-button" id="monthNext" aria-label="Next month">›</button></div></div><div class="month-layout"><div class="calendar-card month-calendar-card"><div class="calendar-grid">${DAY_NAMES.map((day) => `<div class="calendar-day-name">${day.slice(0, 3)}</div>`).join("")}${cells.join("")}</div></div>${renderMonthAgenda(selectedDate)}</div>`;
 }
 
 function currentHabitStats() {
@@ -777,6 +853,7 @@ function formatTrackedMinutes(minutes) {
 function renderReadonlyTaskDetail(task) {
   const progress = taskProgress(task);
   const stages = task.children?.length ? task.children.map((child) => ({
+    id: child.id,
     title: child.title,
     status: child.status,
     progress: child.progress,
@@ -796,21 +873,34 @@ function renderReadonlyTaskDetail(task) {
   const estimatedMinutes = Math.round((Number(task.estimateHours) || 0) * 60);
   const actualMinutes = trackedMinutes(task);
   const status = taskStatusLabel(task);
+  const statusClass = progress >= 100 ? "done" : status === "Confirm completion" ? "pending" : "";
+  const plannedDate = task.scheduledDate || selectedDate;
+  const deadlineDate = task.deadline || plannedDate;
+  const progressWidth = `${Math.min(100, Math.max(0, progress))}%`;
+  const stageProgressControls = (stage) => task.type === "long-term" && stage.id ? `<div class="detail-actions stage-progress-actions"><span class="detail-label detail-action-label">Update subtask</span><button type="button" data-set-progress="${task.id}" data-set-child="${stage.id}" data-progress="25">25%</button><button type="button" data-set-progress="${task.id}" data-set-child="${stage.id}" data-progress="50">50%</button><button type="button" data-set-progress="${task.id}" data-set-child="${stage.id}" data-progress="75">75%</button></div>` : "";
   return `<div class="detail-readonly">
-    <div class="detail-hero" style="--task-color:${taskColor(task)};--task-tint:${hexToRgba(taskColor(task), .12)}">
-      <div><div class="detail-label">${TYPE_LABEL[task.type] || "Task"}</div><p class="detail-summary">${escapeHtml(task.notes || "No notes added yet.")}</p></div>
-      <span class="status-pill ${task.status === "done" ? "done" : task.status === "pending_confirmation" ? "pending" : ""}">${status}</span>
+    <div class="detail-intro" style="--task-color:${taskColor(task)}">
+      <div class="detail-label">${TYPE_LABEL[task.type] || "Task"}</div>
+      <p class="detail-description">${escapeHtml(task.notes || "No notes added yet.")}</p>
     </div>
-    <div class="detail-grid detail-summary-grid">
-      <div><div class="detail-label">Planned date</div><div class="detail-value">${escapeHtml(formatEnglishDate(task.scheduledDate || selectedDate))}</div></div>
-      <div><div class="detail-label">Deadline</div><div class="detail-value">${task.deadline ? escapeHtml(formatEnglishDate(task.deadline)) : "No deadline"}</div></div>
-      <div><div class="detail-label">Time span</div><div class="detail-value">${escapeHtml(detailTimeLabel(task.startTime, task.endTime))}</div></div>
-      <div><div class="detail-label">Progress</div><div class="detail-value">${progress}%</div></div>
+    <div class="detail-schedule-card">
+      <div class="detail-schedule-node">
+        <span class="detail-schedule-dot"></span>
+        <div><span class="detail-label">START</span><strong>${escapeHtml(formatEnglishDate(plannedDate))}</strong><small>${escapeHtml(detailTimeLabel(task.startTime, task.endTime))}</small></div>
+      </div>
+      <div class="detail-schedule-line"><span>Total ${escapeHtml(formatTrackedMinutes(estimatedMinutes))}</span></div>
+      <div class="detail-schedule-node detail-schedule-node-end">
+        <span class="detail-schedule-dot"></span>
+        <div><span class="detail-label">DEADLINE</span><strong>${task.deadline ? escapeHtml(formatEnglishDate(deadlineDate)) : "No deadline"}</strong><small>${task.deadline ? "Target date" : "Keep moving"}</small></div>
+      </div>
     </div>
-    <div class="detail-block detail-time-comparison"><div class="detail-block-header"><div><div class="detail-label">Focus time</div><div class="detail-value">Actual vs estimated</div></div><strong>${formatTrackedMinutes(actualMinutes)} / ${formatTrackedMinutes(estimatedMinutes)}</strong></div><div class="time-comparison-track"><span style="width:${estimatedMinutes ? Math.min(100, actualMinutes / estimatedMinutes * 100) : 0}%"></span></div><div class="detail-help">${actualMinutes > estimatedMinutes && estimatedMinutes ? "Actual focus time is above the estimate." : "Recorded focus time compared with the original estimate."}</div></div>
-    <div class="detail-block"><div class="detail-block-header"><div><div class="detail-label">Stages</div><div class="detail-value">Subtask timeline</div></div><span class="muted-label">${stages.length} ${stages.length === 1 ? "stage" : "stages"}</span></div><div class="task-stage-timeline">${stages.map((stage) => `<div class="task-stage ${stage.status === "done" ? "done" : ""}"><span class="task-stage-marker">${stage.status === "done" ? "✓" : ""}</span><div class="task-stage-content"><strong>${escapeHtml(stage.title)}</strong><span>${escapeHtml(stage.date ? formatEnglishDate(stage.date) : "Date not set")} · ${escapeHtml(detailTimeLabel(stage.startTime, stage.endTime))}</span><small>${stage.status === "done" ? "Completed" : `${clampProgress(stage.progress)}% complete`} · ${formatTrackedMinutes(stage.actualMinutes)} focused</small></div></div>`).join("")}</div></div>
-    <div class="detail-progress-readonly"><div class="detail-block-header"><div><div class="detail-label">Progress</div><div class="detail-value">${progress}% complete</div></div>${energyMarkup(progress)}</div></div>
-    <div class="detail-actions"><span class="detail-label detail-action-label">Update progress</span><button type="button" data-set-progress="${task.id}" data-progress="25">25%</button><button type="button" data-set-progress="${task.id}" data-progress="50">50%</button><button type="button" data-set-progress="${task.id}" data-progress="75">75%</button><button type="button" data-open-timer="${task.id}" class="timer-button detail-timer-button" aria-label="Open Pomodoro timer">${playIcon()}<span>Focus</span></button></div>
+    <div class="detail-status-row">
+      <div class="detail-status-item"><span class="detail-label">STATUS</span><span class="status-pill ${statusClass}">${status}</span></div>
+      <div class="detail-status-item detail-status-progress"><span class="detail-label">PROGRESS</span><div class="detail-status-track"><span style="width:${progressWidth}"></span></div><strong>${progress}%</strong></div>
+    </div>
+    <div class="detail-block detail-time-comparison"><div class="detail-block-header"><div><div class="detail-label">Focus time</div></div><span class="muted-label">Actual / estimated</span></div><div class="detail-focus-metrics"><div><strong>${formatTrackedMinutes(actualMinutes)}</strong><span>Actual</span></div><div><strong>${formatTrackedMinutes(estimatedMinutes)}</strong><span>Estimated</span></div></div><div class="time-comparison-track"><span style="width:${estimatedMinutes ? Math.min(100, actualMinutes / estimatedMinutes * 100) : 0}%"></span></div></div>
+    <div class="detail-block detail-stages-block"><div class="detail-block-header"><div><div class="detail-label">Stages</div><div class="detail-value">Subtask timeline</div></div><span class="muted-label">${stages.length} ${stages.length === 1 ? "stage" : "stages"}</span></div><div class="task-stage-timeline">${stages.map((stage) => `<div class="task-stage ${stage.status === "done" ? "done" : ""}"><span class="task-stage-marker">${stage.status === "done" ? "✓" : ""}</span><div class="task-stage-content"><strong>${escapeHtml(stage.title)}</strong><span>${escapeHtml(stage.date ? formatEnglishDate(stage.date) : "Date not set")} · ${escapeHtml(detailTimeLabel(stage.startTime, stage.endTime))}</span><small>${stage.status === "done" ? "Completed" : `${clampProgress(stage.progress)}% complete`} · ${formatTrackedMinutes(stage.actualMinutes)} focused</small>${stageProgressControls(stage)}</div></div>`).join("")}</div></div>
+    <div class="detail-actions">${task.type !== "long-term" ? `<span class="detail-label detail-action-label">Update progress</span><button type="button" data-set-progress="${task.id}" data-progress="25">25%</button><button type="button" data-set-progress="${task.id}" data-progress="50">50%</button><button type="button" data-set-progress="${task.id}" data-progress="75">75%</button>` : `<span class="detail-label detail-action-label">Progress is derived from subtasks</span>`}<button type="button" data-open-timer="${task.id}" class="timer-button detail-timer-button" aria-label="Open Pomodoro timer">${playIcon()}<span>Focus</span></button></div>
   </div>`;
 }
 function renderEditableTaskDetail(task) {
@@ -826,7 +916,7 @@ function bindTaskDetailControls(task) {
   $("#addSubtaskButton")?.addEventListener("click", () => addSubtask(task.id));
   $$(`[data-confirm-child]`).forEach((button) => button.addEventListener("click", () => confirmChild(task.id, Number(button.dataset.confirmChild))));
   $$(`[data-remove-child]`).forEach((button) => button.addEventListener("click", () => removeSubtask(task.id, Number(button.dataset.removeChild))));
-  $$(`[data-set-progress]`).forEach((button) => button.addEventListener("click", () => setTaskProgress(button.dataset.setProgress, Number(button.dataset.progress))));
+  $$(`[data-set-progress]`).forEach((button) => button.addEventListener("click", () => setTaskProgress(button.dataset.setProgress, Number(button.dataset.progress), button.dataset.setChild || null)));
   $$(`[data-open-timer]`).forEach((button) => button.addEventListener("click", () => openPomodoro(button.dataset.openTimer)));
   if (currentDetailMode !== "edit") return;
   $$(`[data-edit-progress]`).forEach((button) => button.addEventListener("click", () => {
@@ -847,7 +937,7 @@ function openTaskDetail(taskId, drawer = false, mode = "readonly") {
   $("#detailContent").innerHTML = mode === "edit" ? renderEditableTaskDetail(task) : renderReadonlyTaskDetail(task);
   $("#editTaskButton").hidden = mode === "edit";
   $("#saveTaskButton").hidden = mode !== "edit";
-  $("#confirmCompleteButton").hidden = task.status === "done";
+  $("#confirmCompleteButton").hidden = task.type === "long-term" || task.status === "done";
   $("#confirmCompleteButton").dataset.completeTask = task.id;
   $("#taskDetailModal").classList.toggle("drawer-mode", drawer);
   if (!$("#taskDetailModal").open) $("#taskDetailModal").showModal();
@@ -863,13 +953,13 @@ async function applyPendingCompletion() {
   const task = state.tasks.find((item) => item.id === pendingCompletion.taskId);
   if (!task) return;
   if (pendingCompletion.childIndex == null) {
+    if (task.type === "long-term") { pendingCompletion = null; $("#completionModal").close(); return; }
     task.status = "done";
     task.progress = 100;
   } else {
     const child = task.children?.[pendingCompletion.childIndex];
     if (!child) return;
-    child.progress = 100;
-    child.status = "done";
+    updateChildRecord(task.id, child.id, (current) => ({ ...current, progress: 100, status: "done" }));
   }
   pendingCompletion = null;
   const cloudSave = saveState({ immediate: true });
@@ -881,7 +971,7 @@ async function applyPendingCompletion() {
   else if (result?.reason === "not-connected") toast("Completion confirmed locally. Connect cloud sync to share it.");
   else toast("Completion confirmed locally; cloud sync is still pending.");
 }
-function confirmChild(taskId, index) { const task = state.tasks.find((item) => item.id === taskId); const child = task?.children?.[index]; if (!child) return; child.progress = 100; child.status = "pending_confirmation"; saveState(); openCompletionPrompt(taskId, index); }
+function confirmChild(taskId, index) { const task = state.tasks.find((item) => item.id === taskId); const child = task?.children?.[index]; if (!child) return; updateChildRecord(taskId, child.id, (current) => ({ ...current, progress: 100, status: "pending_confirmation" })); saveState(); openCompletionPrompt(taskId, index); }
 async function saveTaskChanges() {
   const task = state.tasks.find((item) => item.id === currentDetailTaskId);
   if (!task) return;
@@ -896,48 +986,49 @@ async function saveTaskChanges() {
   task.notes = $("#editNotes").value.trim();
 
   let pendingChildIndex = null;
-  task.children?.forEach((child, index) => {
+  const nextChildren = (task.children || []).map((child, index) => {
     const title = document.querySelector(`[data-child-index="${index}"][data-child-field="title"]`);
     const date = document.querySelector(`[data-child-index="${index}"][data-child-field="date"]`);
     const startTime = document.querySelector(`[data-child-index="${index}"][data-child-field="startTime"]`);
     const endTime = document.querySelector(`[data-child-index="${index}"][data-child-field="endTime"]`);
     const progress = document.querySelector(`[data-child-index="${index}"][data-child-field="progress"]`);
-    if (title) child.title = title.value.trim() || child.title;
-    if (date) child.date = date.value || task.scheduledDate;
-    if (startTime) child.startTime = startTime.value;
-    if (endTime) child.endTime = endTime.value;
+    const nextChild = { ...child };
+    if (title) nextChild.title = title.value.trim() || nextChild.title;
+    if (date) nextChild.date = date.value || task.scheduledDate;
+    if (startTime) nextChild.startTime = startTime.value;
+    if (endTime) nextChild.endTime = endTime.value;
     if (progress) {
-      child.progress = Math.max(0, Math.min(100, Number(progress.value) || 0));
-      if (child.progress >= 100) {
-        if (child.status !== "done") {
-          child.status = "pending_confirmation";
+      nextChild.progress = clampProgress(progress.value);
+      if (nextChild.progress >= 100) {
+        if (nextChild.status !== "done") {
+          nextChild.status = "pending_confirmation";
           if (pendingChildIndex == null) pendingChildIndex = index;
         }
-      } else if (child.progress > 0) child.status = "in_progress";
-      else child.status = "not_started";
+      } else nextChild.status = childProgressStatus(nextChild.progress);
     }
-    child.tagColor = task.tagColor;
+    nextChild.tagColor = task.tagColor;
+    return nextChild;
   });
+  state.tasks = state.tasks.map((item) => item.id === task.id ? { ...item, children: nextChildren } : item);
+  const savedTask = state.tasks.find((item) => item.id === task.id);
 
-  if (task.type === "long-term") {
-    task.progress = progressForTask(task);
-    task.status = task.progress >= 100 ? (task.status === "done" ? "done" : "pending_confirmation") : task.progress > 0 ? "in_progress" : "not_started";
+  if (savedTask.type === "long-term") {
+    // Long-term progress is derived at read time; never write a subjective parent value.
   } else {
-    const enteredProgress = Math.max(0, Math.min(100, Number($("#editProgress")?.value ?? task.progress ?? 0)));
-    if (task.type === "regular" && task.children?.length) {
-      const derived = Math.round(task.children.filter((child) => child.status === "done").length / task.children.length * 100);
-      if (enteredProgress === derived) delete task.progressOverride;
-      else task.progressOverride = enteredProgress;
+    const enteredProgress = clampProgress($("#editProgress")?.value ?? savedTask.progress ?? 0);
+    let nextProgressOverride = savedTask.progressOverride;
+    if (savedTask.type === "regular" && savedTask.children?.length) {
+      const derived = Math.round(savedTask.children.filter((child) => child.status === "done").length / savedTask.children.length * 100);
+      nextProgressOverride = enteredProgress === derived ? undefined : enteredProgress;
     }
-    task.progress = enteredProgress;
-    task.status = enteredProgress >= 100 ? (task.status === "done" ? "done" : "pending_confirmation") : enteredProgress > 0 ? "in_progress" : "not_started";
+    state.tasks = state.tasks.map((item) => item.id === savedTask.id ? { ...item, progress: enteredProgress, status: childProgressStatus(enteredProgress), progressOverride: nextProgressOverride } : item);
   }
 
   const cloudSave = saveState({ immediate: true });
   $("#taskDetailModal").close();
   render();
   if (pendingChildIndex != null) openCompletionPrompt(task.id, pendingChildIndex);
-  else if (task.status === "pending_confirmation") openCompletionPrompt(task.id);
+  else if (savedTask.status === "pending_confirmation") openCompletionPrompt(savedTask.id);
   const result = await cloudSave;
   if (result?.ok) toast("Task changes saved to cloud.");
   else if (result?.reason === "not-connected") toast("Saved on this device only. Connect cloud sync to share it.");
@@ -946,20 +1037,27 @@ async function saveTaskChanges() {
   else toast(`Saved locally, but cloud sync failed: ${result?.message || "check your connection"}.`);
 }
 
-async function setTaskProgress(taskId, progress) {
-  const task = state.tasks.find((item) => item.id === taskId);
-  if (!task) return;
+async function setTaskProgress(taskId, progress, childId = null) {
+  const record = findTaskTarget(taskId, childId);
+  if (!record) return;
+  const { parent, target } = record;
+  if (!childId && parent.type === "long-term") {
+    toast("Long-term progress is calculated from subtasks.");
+    return;
+  }
   const wasOpen = $("#taskDetailModal").open;
   if (wasOpen) $("#taskDetailModal").close();
-  if (task.type === "regular" && task.children?.length) task.progressOverride = progress;
-  task.progress = progress;
-  task.status = progress >= 100 ? "pending_confirmation" : progress > 0 ? "in_progress" : "not_started";
+  if (childId) {
+    updateChildRecord(parent.id, childId, (child) => ({ ...child, progress, status: childProgressStatus(progress) }));
+  } else {
+    state.tasks = state.tasks.map((task) => task.id === parent.id ? { ...task, ...(task.type === "regular" && task.children?.length ? { progressOverride: progress } : {}), progress, status: childProgressStatus(progress) } : task);
+  }
   const cloudSave = saveState({ immediate: true });
   render();
-  if (progress >= 100) openCompletionPrompt(taskId);
+  if (progress >= 100) openCompletionPrompt(parent.id, childId ? parent.children.findIndex((child) => child.id === childId) : null);
   else {
-    openTaskDetail(taskId, wasOpen);
-    toast(`Progress updated to ${progress}%.`);
+    openTaskDetail(parent.id, wasOpen, "readonly");
+    toast(`${target.title || parent.title} progress updated to ${progress}%.`);
   }
   const result = await cloudSave;
   if (!result?.ok && result?.reason === "cloud-error") toast(`Progress saved locally; cloud sync failed: ${result.message || "check your connection"}.`);
@@ -1008,6 +1106,7 @@ function syncTimerProgress(shouldSync) {
   const pending = pendingTimerSync; pendingTimerSync = null; $("#timerSyncModal").close();
   if (!shouldSync) { toast("Focus recorded. Task progress left unchanged."); return; }
   const task = state.tasks.find((item) => item.id === pending.taskId); if (!task) return;
+  if (task.type === "long-term") { toast("Long-term progress is calculated from subtasks."); return; }
   if (task.type === "regular" && task.children?.length) task.progressOverride = pending.suggestedProgress;
   task.progress = pending.suggestedProgress; task.status = pending.suggestedProgress >= 100 ? "pending_confirmation" : pending.suggestedProgress > 0 ? "in_progress" : "not_started";
   const cloudSave = saveState({ immediate: true }); render();
@@ -1021,20 +1120,28 @@ function findTaskTarget(taskId, childId = null) {
   const target = parent.children?.find((child) => child.id === childId);
   return target ? { parent, target } : null;
 }
+function updateChildRecord(parentId, childId, updater) {
+  let updated = null;
+  state.tasks = state.tasks.map((parent) => {
+    if (parent.id !== parentId) return parent;
+    const nextChildren = (parent.children || []).map((child) => {
+      if (child.id !== childId) return child;
+      const nextChild = updater({ ...child });
+      updated = { parent: { ...parent, children: nextChildren }, target: nextChild };
+      return nextChild;
+    });
+    return updated ? { ...parent, children: nextChildren } : parent;
+  });
+  return updated;
+}
+function childProgressStatus(progress) { return progress >= 100 ? "pending_confirmation" : progress > 0 ? "in_progress" : "not_started"; }
 function completeTask(taskId, childId = null) {
   const record = findTaskTarget(taskId, childId);
   if (!record || record.target.status === "done") return;
   const { parent, target } = record;
-  target.progress = 100;
-  target.status = "done";
-  if (target === parent) {
-    parent.progress = 100;
-    parent.status = "done";
-    delete parent.progressOverride;
-  } else if (parent.type === "long-term") {
-    parent.progress = progressForTask(parent);
-    parent.status = "in_progress";
-  }
+  if (target === parent && parent.type === "long-term") return;
+  if (childId) updateChildRecord(parent.id, childId, (child) => ({ ...child, progress: 100, status: "done" }));
+  else state.tasks = state.tasks.map((task) => task.id === parent.id ? { ...task, progress: 100, status: "done", progressOverride: undefined } : task);
   if ($("#taskDetailModal").open) $("#taskDetailModal").close();
   saveState({ immediate: true });
   render();
@@ -1205,11 +1312,13 @@ $("#exportData").addEventListener("click", exportData);
 $("#menuTrigger").addEventListener("click", () => { $("#sidebar").classList.add("open"); $("#scrim").classList.add("open"); });
 $("#sidebarClose").addEventListener("click", closeSidebar); $("#scrim").addEventListener("click", closeSidebar);
 $("#insightClose").addEventListener("click", () => $("#insightColumn").classList.remove("open"));
-function closeActionMenus() { $("#newMenu").hidden = true; $("#viewMenu").hidden = true; $("#newMenuButton").setAttribute("aria-expanded", "false"); $("#viewMenuButton").setAttribute("aria-expanded", "false"); }
-$("#newMenuButton").addEventListener("click", (event) => { event.stopPropagation(); const menu = $("#newMenu"); const next = menu.hidden; closeActionMenus(); menu.hidden = !next; $("#newMenuButton").setAttribute("aria-expanded", String(next)); });
+function closeActionMenus() { $("#viewMenu").hidden = true; $("#viewMenuButton").setAttribute("aria-expanded", "false"); }
+function closeNewActionSheet() { if ($("#newActionSheet")?.open) $("#newActionSheet").close(); }
+$("#newMenuButton").addEventListener("click", (event) => { event.stopPropagation(); closeActionMenus(); $("#newActionSheet").showModal(); $("#newMenuButton").setAttribute("aria-expanded", "true"); });
 $("#viewMenuButton").addEventListener("click", (event) => { event.stopPropagation(); const menu = $("#viewMenu"); const next = menu.hidden; closeActionMenus(); menu.hidden = !next; $("#viewMenuButton").setAttribute("aria-expanded", String(next)); });
 $("#insightTrigger").addEventListener("click", () => { closeActionMenus(); $("#insightColumn").classList.add("open"); });
-$$(`[data-new-action]`).forEach((button) => button.addEventListener("click", () => { closeActionMenus(); if (button.dataset.newAction === "task") openTaskModal(); if (button.dataset.newAction === "event") openEventDetail(); if (button.dataset.newAction === "course") $("#courseFileInput").click(); }));
+$$(`#newActionSheet [data-new-action]`).forEach((button) => button.addEventListener("click", () => { const action = button.dataset.newAction; closeNewActionSheet(); if (action === "task") openTaskModal(); if (action === "event") openEventDetail(); if (action === "course") $("#courseFileInput").click(); }));
+$("#newActionSheet").addEventListener("close", () => $("#newMenuButton").setAttribute("aria-expanded", "false"));
 window.addEventListener("click", closeActionMenus);
 $$('.nav-item').forEach((item) => item.addEventListener("click", () => { currentView = item.dataset.view; currentTab = currentView === "assignment" ? "board" : "today"; $$(".nav-item").forEach((nav) => nav.classList.toggle("active", nav === item)); if (currentView === "assignment") { $("#pageTitle").textContent = "Assignment and goal"; } else { $("#pageTitle").textContent = placeholderText(currentView).title; } resetPageScroll(); render(); closeSidebar(); }));
 $$('.view-tab').forEach((tab) => tab.addEventListener("click", () => { currentTab = tab.dataset.tab; resetPageScroll(); renderActiveTab(); }));
