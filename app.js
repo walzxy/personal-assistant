@@ -825,7 +825,7 @@ function renderMonthView() {
 
 function currentHabitStats() {
   const now = parseDate(selectedDate); const monday = new Date(now); const day = monday.getDay() || 7; monday.setDate(monday.getDate() - day + 1); const weekStart = isoDate(monday); const monthPrefix = selectedDate.slice(0, 7);
-  return state.habits.map((habit) => { const frequency = habit.frequency || habit.cadence || "weekly"; const dates = (habit.checkins || []).filter((date) => frequency === "weekly" ? date >= weekStart && date <= isoDate(new Date(monday.getTime() + 6 * 86400000)) : date.startsWith(monthPrefix)); const count = dates.length; return { habit, dates, count, achieved: count >= habit.kpi, frequency }; });
+  return state.habits.map((habit) => { const frequency = habit.frequency || habit.cadence || "weekly"; const checkins = [...new Set(habit.checkins || [])]; const dates = checkins.filter((date) => frequency === "weekly" ? date >= weekStart && date <= isoDate(new Date(monday.getTime() + 6 * 86400000)) : date.startsWith(monthPrefix)); const count = dates.length; return { habit, dates, count, achieved: count >= habit.kpi, frequency }; });
 }
 function habitStreak(habit) { const dates = new Set(habit.checkins || []); let cursor = parseDate(todayIso()); let streak = 0; while (dates.has(isoDate(cursor))) { streak += 1; cursor.setDate(cursor.getDate() - 1); } return streak; }
 function habitHeatmapMarkup(habit) { const end = parseDate(selectedDate); const endDay = end.getDay() || 7; end.setDate(end.getDate() + (7 - endDay)); const start = new Date(end); start.setDate(end.getDate() - 83); const checked = new Set(habit.checkins || []); const cells = Array.from({ length: 84 }, (_, index) => { const date = new Date(start); date.setDate(start.getDate() + index); const iso = isoDate(date); return `<span class="habit-heat-cell ${checked.has(iso) ? "checked" : ""} ${iso === todayIso() ? "today" : ""}" title="${iso} · ${checked.has(iso) ? "checked" : "not checked"}"></span>`; }).join(""); return `<div class="habit-heatmap"><div class="detail-label">Check-in history · last 12 weeks</div><div class="habit-heatmap-caption">Only the day you check in is recorded. Past days cannot be filled retroactively.</div><div class="habit-heatmap-grid">${cells}</div></div>`; }
@@ -877,7 +877,7 @@ function renderReadonlyTaskDetail(task) {
   const estimatedMinutes = Math.round((Number(task.estimateHours) || 0) * 60);
   const actualDuration = trackedMinutes(task);
   const stages = task.children?.length ? task.children : [{ title: task.title, status: task.status, progress, startTime: task.startTime, endTime: task.endTime, date: task.scheduledDate, actualDuration }];
-  return `<div class="detail-readonly"><div class="detail-intro" style="--task-color:${taskColor(task)}"><div class="detail-label">${TYPE_LABEL[task.type] || "Task"}</div><p class="detail-description">${escapeHtml(task.notes || "No notes added yet.")}</p></div>${detailScheduleMarkup(task, estimatedMinutes)}${detailStatusMarkup(task, progress)}<div class="detail-block detail-time-comparison"><div class="detail-block-header"><div><div class="detail-label">Focus time</div></div><button type="button" class="detail-inline-button" data-open-time-log="${task.id}" data-time-child="">Edit actual</button></div><div class="detail-focus-metrics"><div><strong>${formatTrackedMinutes(actualDuration)}</strong><span>Actual</span></div><div><strong>${formatTrackedMinutes(estimatedMinutes)}</strong><span>Estimated</span></div></div><div class="time-comparison-track"><span style="width:${estimatedMinutes ? Math.min(100, actualDuration / estimatedMinutes * 100) : 0}%"></span></div></div><div class="detail-block detail-stages-block"><div class="detail-block-header"><div><div class="detail-label">Stages</div><div class="detail-value">Subtask timeline</div></div><span class="muted-label">${stages.length} ${stages.length === 1 ? "stage" : "stages"}</span></div><div class="task-stage-timeline">${stages.map((stage) => `<div class="task-stage ${stage.status === "done" ? "done" : ""}"><span class="task-stage-marker">${stage.status === "done" ? "✓" : ""}</span><div class="task-stage-content"><strong>${escapeHtml(stage.title)}</strong><span>${escapeHtml(stage.date ? formatEnglishDate(stage.date) : "Date not set")} · ${formatTrackedMinutes(stage.actualDuration ?? 0)} / ${formatTrackedMinutes(Math.round((Number(stage.estimateHours) || Number(task.estimateHours) || 0) * 60))}</span></div></div>`).join("")}</div></div><div class="detail-actions"><span class="detail-label detail-action-label">Update progress</span><button type="button" data-set-progress="${task.id}" data-progress="25">25%</button><button type="button" data-set-progress="${task.id}" data-progress="50">50%</button><button type="button" data-set-progress="${task.id}" data-progress="75">75%</button></div></div>`;
+  return `<div class="detail-readonly"><div class="detail-intro" style="--task-color:${taskColor(task)}"><div class="detail-label">${TYPE_LABEL[task.type] || "Task"}</div><p class="detail-description">${escapeHtml(task.notes || "No notes added yet.")}</p></div>${detailScheduleMarkup(task, estimatedMinutes)}${detailStatusMarkup(task, progress)}<div class="detail-block detail-time-comparison"><div class="detail-block-header"><div><div class="detail-label">Focus time</div></div><button type="button" class="detail-inline-button" data-open-time-log="${task.id}" data-time-child="">Edit actual</button></div><div class="detail-focus-metrics"><div><strong>${formatTrackedMinutes(actualDuration)}</strong><span>Actual</span></div><div><strong>${formatTrackedMinutes(estimatedMinutes)}</strong><span>Estimated</span></div></div><div class="time-comparison-track"><span style="width:${estimatedMinutes ? Math.min(100, actualDuration / estimatedMinutes * 100) : 0}%"></span></div></div><div class="detail-block detail-stages-block"><div class="detail-block-header"><div><div class="detail-label">Stages</div><div class="detail-value">Subtask timeline</div></div><span class="muted-label">${stages.length} ${stages.length === 1 ? "stage" : "stages"}</span></div><div class="task-stage-timeline">${stages.map((stage) => `<div class="task-stage ${stage.status === "done" ? "done" : ""}"><span class="task-stage-marker">${stage.status === "done" ? "✓" : ""}</span><div class="task-stage-content"><strong>${escapeHtml(stage.title)}</strong><span>${escapeHtml(stage.date ? formatEnglishDate(stage.date) : "Date not set")} · ${formatTrackedMinutes(stage.actualDuration ?? 0)} / ${formatTrackedMinutes(Math.round((Number(stage.estimateHours) || Number(task.estimateHours) || 0) * 60))}</span></div></div>`).join("")}</div></div></div>`;
 }
 function renderEditableTaskDetail(task) {
   const selectedColor = taskColor(task);
@@ -889,7 +889,6 @@ function bindTaskDetailControls(task) {
   $("#addSubtaskButton")?.addEventListener("click", () => addSubtask(task.id));
   $$(`[data-confirm-child]`).forEach((button) => button.addEventListener("click", () => confirmChild(task.id, Number(button.dataset.confirmChild))));
   $$(`[data-remove-child]`).forEach((button) => button.addEventListener("click", () => removeSubtask(task.id, Number(button.dataset.removeChild))));
-  $$(`[data-set-progress]`).forEach((button) => button.addEventListener("click", () => setTaskProgress(button.dataset.setProgress, Number(button.dataset.progress), button.dataset.setChild || null)));
   $$(`[data-open-time-log]`).forEach((button) => button.addEventListener("click", () => openManualTimeModal(button.dataset.openTimeLog, button.dataset.timeChild || null)));
   $$(`[data-toggle-child]`).forEach((button) => {
     button.dataset.toggleBound = "true";
@@ -1269,7 +1268,30 @@ function hideToast() {
   element.classList.remove("show", "completion-toast");
   element.textContent = "";
 }
-function checkHabit(habitId) { const habit = state.habits.find((item) => item.id === habitId); if (!habit) return; habit.checkins ||= []; const today = todayIso(); const index = habit.checkins.indexOf(today); if (index >= 0) { habit.checkins.splice(index, 1); saveState(); render(); toast(`${habit.name} check-in undone.`); return; } habit.checkins.push(today); saveState(); render(); toast(`${habit.name} checked in for today.`); }
+function checkHabit(habitId) {
+  const habit = state.habits.find((item) => item.id === habitId);
+  if (!habit) return;
+  const checkins = [...new Set(habit.checkins || [])];
+  const today = todayIso();
+  const existingIndex = checkins.indexOf(today);
+  if (existingIndex >= 0) {
+    const nextCheckins = checkins.filter((date) => date !== today);
+    state.habits = state.habits.map((item) => item.id === habitId ? { ...item, checkins: nextCheckins } : item);
+    saveState();
+    render();
+    toast(`${habit.name} check-in undone.`);
+    return;
+  }
+  const stats = currentHabitStats().find((item) => item.habit.id === habitId);
+  if (stats && stats.count >= Number(habit.kpi || 0)) {
+    toast("今日目标已达成");
+    return;
+  }
+  state.habits = state.habits.map((item) => item.id === habitId ? { ...item, checkins: [...checkins, today] } : item);
+  saveState();
+  render();
+  toast(`${habit.name} checked in for today.`);
+}
 
 function openTaskModal() { const form = $("#taskForm"); form.reset(); $("#taskModal").showModal(); }
 function createTask(event) {
