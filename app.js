@@ -1110,6 +1110,7 @@ function completeTask(taskId, childId = null) {
 }
 let taskQuickAction = null;
 let taskQuickConfirmAction = null;
+let restoreQuickAfterConfirm = false;
 function quickActionRecord() { return taskQuickAction ? findTaskTarget(taskQuickAction.taskId, taskQuickAction.childId) : null; }
 function openTaskQuickAction(taskId, childId = null) {
   const record = findTaskTarget(taskId, childId);
@@ -1163,11 +1164,25 @@ function updateQuickActionProgress(nextProgress) {
 function openTaskQuickConfirm(action) {
   if (!quickActionRecord()) return;
   taskQuickConfirmAction = action;
+  restoreQuickAfterConfirm = true;
   const title = quickActionRecord().target.title || quickActionRecord().parent.title;
   $("#taskQuickConfirmMessage").textContent = action === "reset" ? `Reset “${title}” to 0%?` : `Mark “${title}” as complete?`;
+  if ($("#taskQuickActionModal").open) $("#taskQuickActionModal").close();
   $("#taskQuickConfirmDialog").showModal();
 }
-function closeTaskQuickConfirm() { if ($("#taskQuickConfirmDialog").open) $("#taskQuickConfirmDialog").close(); taskQuickConfirmAction = null; }
+function restoreQuickActionModal() {
+  if (!taskQuickAction || $("#taskQuickActionModal").open) return;
+  renderTaskQuickAction();
+  $("#taskQuickActionModal").showModal();
+}
+function closeTaskQuickConfirm({ restore = true } = {}) {
+  restoreQuickAfterConfirm = restore;
+  if ($("#taskQuickConfirmDialog").open) $("#taskQuickConfirmDialog").close();
+  else {
+    taskQuickConfirmAction = null;
+    if (restore) restoreQuickActionModal();
+  }
+}
 function finalizeTaskQuickAction(action) {
   const record = quickActionRecord();
   if (!record) return;
@@ -1181,7 +1196,7 @@ function finalizeTaskQuickAction(action) {
   const title = record.target.title || parent.title;
   const childId = taskQuickAction.childId;
   const cloudSave = saveState({ immediate: true });
-  closeTaskQuickConfirm();
+  closeTaskQuickConfirm({ restore: false });
   if ($("#taskQuickActionModal").open) $("#taskQuickActionModal").close();
   taskQuickAction = null;
   render();
@@ -1341,10 +1356,10 @@ $("#manualActualDuration").addEventListener("change", saveManualTime);
 $("#manualTimeModal").addEventListener("close", () => { manualTimeTarget = null; });
 $("#confirmCompletionButton").addEventListener("click", (event) => { event.preventDefault(); applyPendingCompletion(); });
 $("#completionModal").addEventListener("close", () => { if ($("#completionModal").returnValue === "cancel") pendingCompletion = null; });
-$("#taskQuickConfirmCancel").addEventListener("click", closeTaskQuickConfirm);
-$("#taskQuickConfirmYes").addEventListener("click", () => { const action = taskQuickConfirmAction; if (action) finalizeTaskQuickAction(action); });
-$("#taskQuickConfirmDialog").addEventListener("close", () => { taskQuickConfirmAction = null; });
-$("#taskQuickActionModal").addEventListener("close", () => { taskQuickAction = null; taskQuickConfirmAction = null; if ($("#taskQuickConfirmDialog").open) $("#taskQuickConfirmDialog").close(); });
+$("#taskQuickConfirmCancel").addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); closeTaskQuickConfirm(); });
+$("#taskQuickConfirmYes").addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); const action = taskQuickConfirmAction; if (action) finalizeTaskQuickAction(action); });
+$("#taskQuickConfirmDialog").addEventListener("close", () => { const shouldRestore = restoreQuickAfterConfirm && Boolean(taskQuickAction); taskQuickConfirmAction = null; restoreQuickAfterConfirm = false; if (shouldRestore) restoreQuickActionModal(); });
+$("#taskQuickActionModal").addEventListener("close", () => { if (!taskQuickConfirmAction) taskQuickAction = null; });
 $("#saveHabitButton").addEventListener("click", (event) => { event.preventDefault(); saveHabitChanges(); });
 $("#deleteHabitButton").addEventListener("click", deleteHabit);
 $("#cloudLoginButton").addEventListener("click", openAuthModal);

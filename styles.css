@@ -664,12 +664,13 @@ button.calendar-cell { border: 0; color: inherit; text-align: left; font: inheri
 .quick-progress-adjust { display: flex; justify-content: center; gap: 12px; margin-top: 15px; }
 .quick-adjust-button, .quick-complete-button, .quick-reset-button { display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid #d5dfe5; border-radius: 50%; color: var(--cold-deep); background: #edf2f5; font: 600 22px/1 "Space Grotesk", Inter, sans-serif; transition: background .2s ease, color .2s ease, box-shadow .2s ease, transform .2s ease; }
 .quick-adjust-button:hover, .quick-adjust-button:focus-visible, .quick-reset-button:hover, .quick-reset-button:focus-visible { color: #fff; background: var(--cold-deep); box-shadow: var(--shadow-hover); transform: translateY(-1px); outline: 0; }
-.quick-complete-button { color: #fff; border-color: var(--green); background: var(--green); font-size: 20px; }
+.quick-complete-button { flex: 0 0 56px !important; width: 56px; min-width: 56px; height: 56px; min-height: 56px; aspect-ratio: 1; padding: 0; border-radius: 9999px; color: #fff; border-color: var(--green); background: var(--green); font-size: 20px; position: relative; z-index: 2; pointer-events: auto; }
 .quick-complete-button:hover, .quick-complete-button:focus-visible { background: #4f8159; box-shadow: var(--shadow-hover); transform: translateY(-1px); outline: 0; }
 .quick-completed-state { display: grid; justify-items: center; gap: 10px; padding: 6px 0 12px; }
 .quick-completed-face { color: var(--green); font: 600 30px "Space Grotesk", Inter, sans-serif; letter-spacing: .05em; }
 .quick-completed-state .quick-progress-grid { width: 100%; }
 .quick-completed-state > strong { color: var(--green); font: 600 14px "Space Grotesk", Inter, sans-serif; }
 .quick-reset-button { color: var(--warm-deep); background: #f5ede7; border-color: #eadbd1; }
-.quick-confirm-modal { width: min(340px, calc(100vw - 30px)); }
+.task-quick-modal { z-index: 90; }
+.quick-confirm-modal { z-index: 100; width: min(340px, calc(100vw - 30px)); }
 .quick-confirm-modal .completion-message { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.6; }
