@@ -121,6 +121,11 @@ h2 { font-size: 19px; letter-spacing: -.025em; margin-top: 6px; }
 .task-card-top { display: flex; justify-content: space-between; gap: 15px; align-items: flex-start; }.task-card-title { font-size: 14px; font-weight: 600; }.task-color-dot, .task-card-title .task-color-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--task-color, #8ea1b5); margin-right: 8px; vertical-align: 1px; }.task-card-meta { color: var(--muted); font-size: 11px; margin-top: 6px; }.task-card-actions { display: flex; align-items: center; gap: 6px; }
 .status-pill { color: var(--cold-deep); background: #e8efec; border-radius: 999px; padding: 5px 8px; font-size: 10px; white-space: nowrap; }.status-pill.pending { background: #f4e9df; color: var(--warm-deep); }.status-pill.done { background: #dfede3; color: #557b62; }
 .progress-row { display: flex; align-items: center; gap: 12px; margin-top: 15px; }.energy-grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; flex: 1; }.energy-cell { height: 10px; border-radius: 3px; background: #dfe5e2; }.energy-cell.filled.red { background: var(--red); }.energy-cell.filled.yellow { background: var(--yellow); }.energy-cell.filled.green { background: var(--green); }.energy-cell.partial { background: linear-gradient(to right, var(--partial-color) var(--partial-fill), #dfe5e2 var(--partial-fill)); }.energy-cell.partial.red { --partial-color: var(--red); }.energy-cell.partial.yellow { --partial-color: var(--yellow); }.energy-cell.partial.green { --partial-color: var(--green); }.progress-number { font-size: 12px; font-weight: 600; min-width: 39px; text-align: right; }.task-footer { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-top: 13px; color: var(--muted); font-size: 11px; }.task-footer button { border: 0; background: transparent; color: var(--cold-deep); font-weight: 600; font-size: 11px; padding: 0; }.task-footer button:hover { color: var(--ink); }
+.progress-row .battery-progress { flex: 1 1 auto; width: 100%; min-width: 0; }
+.progress-row .battery-progress .energy-grid { width: 100%; }
+.task-card-progress .battery-progress { gap: 12px; }
+.task-card-progress .energy-cell { height: 11px; border-radius: 3px; }
+.task-card-progress .battery-value { min-width: 42px; color: var(--ink); font: 600 12px "Space Grotesk", Inter, sans-serif; text-align: right; }
 .subtask-note { margin-top: 10px; padding: 9px 11px; border-radius: 10px; background: #f5f7f4; font-size: 11px; color: var(--muted); }
 .long-term-card { background: var(--panel); border: 1px solid #e7e4df; border-left: 4px solid var(--task-color, #86a3a3); border-radius: 15px; padding: 16px; }.long-term-card .progress-row { margin-top: 12px; }
 
@@ -642,8 +647,8 @@ button.calendar-cell { border: 0; color: inherit; text-align: left; font: inheri
 /* Task quick actions: card-level progress and reset loop */
 .task-status-button { display: grid; place-items: center; flex: 0 0 29px; width: 29px; height: 29px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--cold-deep); font: 400 24px/1 Inter, sans-serif; transition: color .2s ease, background .2s ease, transform .2s ease; }
 .task-status-button:hover, .task-status-button:focus-visible { color: var(--ink); background: #edf2f5; transform: scale(1.08); outline: 0; }
-.task-status-button.completed { color: var(--green); font-size: 20px; }
-.task-status-button.completed:hover, .task-status-button.completed:focus-visible { color: #487e55; background: #e1eee3; }
+.task-status-button.completed { color: #6f9675; font-size: 20px; }
+.task-status-button.completed:hover, .task-status-button.completed:focus-visible { color: #557b62; background: #e1eee3; }
 .task-footer-actions .task-status-button { margin-right: 1px; }
 .kanban-card-actions .task-status-button { flex: 0 0 29px; }
 .task-quick-modal { width: min(360px, calc(100vw - 30px)); }

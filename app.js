@@ -427,6 +427,7 @@ function batteryProgressBar(progress, weight = 1, orientation = "horizontal", sh
   return `<div class="battery-progress ${orientation}" data-weight="${weight}" aria-label="Progress ${value}%, weight ${weight}"><div class="energy-grid">${Array.from({ length: 10 }, (_, index) => { const isPartial = index === filled && partial > 0 && filled < 10; return `<span class="energy-cell ${index < filled ? `filled ${color}` : isPartial ? `partial ${color}` : ""}" ${isPartial ? `style="--partial-fill:${partial * 10}%"` : ""}></span>`; }).join("")}</div>${showValue ? `<span class="battery-value">${value}%${face}</span>` : ""}</div>`;
 }
 function energyMarkup(progress, extraClass = "") { return batteryProgressBar(progress, 1, extraClass.includes("vertical") ? "vertical" : "horizontal", false); }
+function estimateLabel(task) { return `${Number(task.estimateHours || 0).toLocaleString("en-US", { maximumFractionDigits: 2 })}h estimated`; }
 
 function render() {
   renderDateHeader();
@@ -536,8 +537,7 @@ function renderTasks() {
     const sortKey = taskSortKey(task);
     const childText = task.type === "subtask" ? `<span class="subtask-marker" title="Sub-task">⌘</span> ${escapeHtml(task.parentTitle)}` : task.children?.length ? `${task.children.length} subtasks` : `${task.estimateHours || 0}h estimated`;
     const statusButton = taskQuickButtonMarkup(task, detailId, task.parentId ? task.id : null);
-    const timeButton = `<button class="task-time-button" data-edit-time="${detailId}" type="button">${escapeHtml(detailTimeLabel(task.startTime, task.endTime))}</button>`;
-  return `<article class="task-card ${task.difficulty === "hard" ? "hard" : ""} ${task.status === "done" ? "completed" : ""}" draggable="true" data-open-task="${detailId}" data-today-sort-key="${escapeHtml(sortKey)}" style="--task-color:${taskColor(task)};--task-tint:${hexToRgba(taskColor(task))}"><div class="task-card-top"><div><div class="task-card-title"><span class="task-color-dot"></span>${escapeHtml(task.title)}</div><div class="task-card-meta">${childText}</div></div><div class="task-card-actions"><span class="status-pill ${status}">${status === "pending" ? "Confirm" : status === "done" ? "Done" : task.status === "in_progress" ? "In progress" : "Not started"}</span><button class="icon-button detail-arrow" data-open-task="${detailId}" aria-label="打开任务">›</button></div></div><div class="progress-row">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div><div class="task-footer"><div class="task-footer-meta"><span data-timer-minutes="${detailId}">${trackedMinutes(task)} min focused</span>${timeButton}</div><div class="task-footer-actions">${statusButton}</div></div>${task.children?.length && task.type !== "long-term" ? `<div class="subtask-note">${task.children.map((child) => `${child.status === "done" ? "✓" : "○"} ${escapeHtml(child.title)}`).join("　")}</div>` : ""}</article>`;
+  return `<article class="task-card ${task.difficulty === "hard" ? "hard" : ""} ${task.status === "done" ? "completed" : ""}" draggable="true" data-open-task="${detailId}" data-today-sort-key="${escapeHtml(sortKey)}" style="--task-color:${taskColor(task)};--task-tint:${hexToRgba(taskColor(task))}"><div class="task-card-top"><div><div class="task-card-title"><span class="task-color-dot"></span>${escapeHtml(task.title)}</div><div class="task-card-meta">${childText}</div></div><div class="task-card-actions"><span class="status-pill ${status}">${status === "pending" ? "Confirm" : status === "done" ? "Done" : task.status === "in_progress" ? "In progress" : "Not started"}</span><button class="icon-button detail-arrow" data-open-task="${detailId}" aria-label="打开任务">›</button></div></div><div class="progress-row task-card-progress">${batteryProgressBar(progress, 1, "horizontal", true)}</div><div class="task-footer"><div class="task-footer-meta"><span>${escapeHtml(estimateLabel(task))}</span></div><div class="task-footer-actions">${statusButton}</div></div>${task.children?.length && task.type !== "long-term" ? `<div class="subtask-note">${task.children.map((child) => `${child.status === "done" ? "✓" : "○"} ${escapeHtml(child.title)}`).join("　")}</div>` : ""}</article>`;
   }).join("");
   $("#taskList").querySelectorAll(".task-card").forEach((card) => card.addEventListener("click", (event) => { if (!event.target.closest("button") && !card.dataset.dragSuppressed) openTaskDetail(card.dataset.openTask); }));
   $("#taskList").querySelectorAll("[data-open-task]").forEach((button) => button.addEventListener("click", () => openTaskDetail(button.dataset.openTask)));
@@ -550,7 +550,7 @@ function renderTasks() {
 function renderLongTerm() {
   const tasks = state.tasks.filter((task) => task.type === "long-term");
   if (!tasks.length) { $("#longTermList").innerHTML = `<div class="empty-state">Long-term projects will appear here when you create one.</div>`; return; }
-  $("#longTermList").innerHTML = tasks.map((task) => { const progress = progressForTask(task); const completeButton = ""; const status = progress >= 100 ? "done" : progress > 0 ? "in_progress" : ""; return `<article class="long-term-card" data-open-task="${task.id}" style="--task-color:${taskColor(task)};--task-tint:${hexToRgba(taskColor(task))}"><div class="task-card-top"><div><div class="task-card-title"><span class="task-color-dot"></span>${escapeHtml(task.title)}</div><div class="task-card-meta">${(task.children || []).filter((child) => child.status === "done").length} / ${(task.children || []).length} subtasks</div></div><span class="status-pill ${status}">${progress}%</span></div><div class="progress-row">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div><div class="task-footer"><span>${trackedMinutes(task)} min focused</span>${completeButton}</div></article>`; }).join("");
+  $("#longTermList").innerHTML = tasks.map((task) => { const progress = progressForTask(task); const status = progress >= 100 ? "done" : progress > 0 ? "in_progress" : ""; return `<article class="long-term-card" data-open-task="${task.id}" style="--task-color:${taskColor(task)};--task-tint:${hexToRgba(taskColor(task))}"><div class="task-card-top"><div><div class="task-card-title"><span class="task-color-dot"></span>${escapeHtml(task.title)}</div><div class="task-card-meta">${(task.children || []).filter((child) => child.status === "done").length} / ${(task.children || []).length} subtasks</div></div><span class="status-pill ${status}">${progress}%</span></div><div class="progress-row task-card-progress">${batteryProgressBar(progress, 1, "horizontal", true)}</div><div class="task-footer"><span>${escapeHtml(estimateLabel(task))}</span></div></article>`; }).join("");
   $("#longTermList").querySelectorAll("[data-open-task]").forEach((card) => card.addEventListener("click", (event) => { if (!event.target.closest("button")) openTaskDetail(card.dataset.openTask); }));
   $("#longTermList").querySelectorAll("[data-complete-task]").forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); completeTask(button.dataset.completeTask); }));
 }
@@ -1137,17 +1137,28 @@ function renderTaskQuickAction() {
   $("#quickProgressPlus")?.addEventListener("click", () => updateQuickActionProgress(progress + 10));
   $("#quickCompleteButton")?.addEventListener("click", () => openTaskQuickConfirm("complete"));
 }
+function updateTaskProgress(taskId, nextProgress, childId = null) {
+  const record = findTaskTarget(taskId, childId);
+  if (!record) return false;
+  const progress = clampProgress(nextProgress);
+  const { parent } = record;
+  if (childId) {
+    updateChildRecord(parent.id, childId, (child) => ({ ...child, progress, status: childProgressStatus(progress) }));
+    return true;
+  }
+  if (parent.type === "long-term") return false;
+  state.tasks = state.tasks.map((task) => task.id === parent.id ? { ...task, ...(task.type === "regular" && task.children?.length ? { progressOverride: progress } : {}), progress, status: childProgressStatus(progress) } : task);
+  return true;
+}
 function updateQuickActionProgress(nextProgress) {
   const record = quickActionRecord();
   if (!record) return;
   const progress = clampProgress(nextProgress);
-  const { parent } = record;
-  if (taskQuickAction.childId) updateChildRecord(parent.id, taskQuickAction.childId, (child) => ({ ...child, progress, status: childProgressStatus(progress) }));
-  else if (parent.type !== "long-term") state.tasks = state.tasks.map((task) => task.id === parent.id ? { ...task, ...(task.type === "regular" && task.children?.length ? { progressOverride: progress } : {}), progress, status: childProgressStatus(progress) } : task);
-  else return;
-  saveState({ immediate: true });
+  if (!updateTaskProgress(taskQuickAction.taskId, progress, taskQuickAction.childId)) return;
+  const cloudSave = saveState({ immediate: true });
   render();
   renderTaskQuickAction();
+  cloudSave.catch(() => {});
 }
 function openTaskQuickConfirm(action) {
   if (!quickActionRecord()) return;
