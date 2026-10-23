@@ -622,74 +622,16 @@ function bindBoardView() {
   $("#boardView")?.querySelectorAll("[data-complete-task]").forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); completeTask(button.dataset.completeTask, button.dataset.completeChild || null); }));
 }
 
-const CALENDAR_START = 8 * 60;
-const CALENDAR_END = 22 * 60;
-const CALENDAR_SLOT_HEIGHT = 10;
+const WEEK_DAY_START = 0;
+const WEEK_DAY_END = 24 * 60;
+const WEEK_HOUR_HEIGHT = 80;
 function timeToMinutes(value) { if (!value) return null; const [hours, minutes] = value.split(":").map(Number); return hours * 60 + minutes; }
 function minutesToTime(value) { const minutes = Math.max(0, Math.round(value)); return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`; }
-function snapToFive(value) { return Math.round(value / 5) * 5; }
 function eventOccurrencesForDate(date) { const targetDate = dateKey(date); return (state.events || []).filter((event) => dateKey(event.date) === targetDate && event.start && event.end).map((event) => ({ ...event, date: targetDate, kind: "event", name: event.name || event.title || "Event" })); }
-function calendarItemsForDate(date) { const targetDate = dateKey(date); return { courses: [...courseOccurrencesForDate(targetDate), ...eventOccurrencesForDate(targetDate)].filter((item) => item.start && item.end), tasks: tasksForDate(targetDate) }; }
 let currentEventId = null;
 function openEventDetail(eventId = null) { const event = (state.events || []).find((item) => item.id === eventId); currentEventId = event?.id || null; $("#eventModalTitle").textContent = event ? "Edit event" : "Add an event"; $("#eventTitle").value = event?.name || event?.title || ""; $("#eventDate").value = event?.date || selectedDate; $("#eventStart").value = event?.start || "09:00"; $("#eventEnd").value = event?.end || "10:00"; $("#eventColor").value = event?.color || "#E8DCD1"; $("#eventNotes").value = event?.notes || ""; $("#deleteEventButton").hidden = !event; $("#eventModal").showModal(); }
 function saveEventForm(event) { event.preventDefault(); if (event.submitter?.value === "cancel") { $("#eventModal").close(); currentEventId = null; return; } const title = $("#eventTitle").value.trim(); const date = $("#eventDate").value; const start = $("#eventStart").value; const end = $("#eventEnd").value; if (!title || !date || !start || !end) return; if (timeToMinutes(end) <= timeToMinutes(start)) { toast("End time must be after start time."); return; } const wasEditing = Boolean(currentEventId); state.events ||= []; const record = { id: currentEventId || uid("event"), name: title, title, date, start, end, color: $("#eventColor").value, notes: $("#eventNotes").value.trim(), kind: "event" }; if (currentEventId) { const index = state.events.findIndex((item) => item.id === currentEventId); if (index >= 0) state.events[index] = { ...state.events[index], ...record }; } else state.events.push(record); saveState(); $("#eventModal").close(); selectedDate = date; currentTab = "week"; render(); toast(wasEditing ? "Event updated." : "Event added."); currentEventId = null; }
 function deleteEvent() { if (!currentEventId) return; const event = state.events.find((item) => item.id === currentEventId); if (!event) return; state.events = state.events.filter((item) => item.id !== currentEventId); saveState(); $("#eventModal").close(); currentEventId = null; render(); toast("Event deleted."); }
-function layoutCalendarTasks(tasks) {
-  const sorted = [...tasks]
-    .map((task) => ({ task, start: timeToMinutes(task.startTime), end: timeToMinutes(task.endTime) }))
-    .filter((item) => Number.isFinite(item.start) && Number.isFinite(item.end) && item.end > item.start)
-    .sort((a, b) => a.start - b.start || a.end - b.end);
-  const components = [];
-  sorted.forEach((item) => {
-    const component = components.find((group) => group.maxEnd > item.start);
-    if (component) {
-      component.items.push(item);
-      component.maxEnd = Math.max(component.maxEnd, item.end);
-    } else {
-      components.push({ items: [item], maxEnd: item.end });
-    }
-  });
-  return components.flatMap((component) => {
-    const lanes = [];
-    const placed = component.items.map((item) => {
-      let lane = lanes.findIndex((lastEnd) => item.start >= lastEnd);
-      if (lane === -1) {
-        lane = lanes.length;
-        lanes.push(item.end);
-      } else {
-        lanes[lane] = item.end;
-      }
-      return { ...item, lane };
-    });
-    const laneCount = Math.max(1, lanes.length);
-    return placed.map((item) => ({ ...item, laneCount }));
-  });
-}
-function calendarBlockStyle(start, end) { const top = Math.max(0, (start - CALENDAR_START) / 5 * CALENDAR_SLOT_HEIGHT); const height = Math.max(25, (end - start) / 5 * CALENDAR_SLOT_HEIGHT); return `top:${top}px;height:${height}px;`; }
-function renderCalendarDay(date) {
-  const targetDate = dateKey(date);
-  const { courses, tasks } = calendarItemsForDate(targetDate);
-  const timedTasks = tasks.filter((task) => {
-    const start = timeToMinutes(task.startTime);
-    const end = timeToMinutes(task.endTime);
-    return Number.isFinite(start) && Number.isFinite(end) && end > start;
-  });
-  const laidOut = layoutCalendarTasks(timedTasks);
-  const backgrounds = courses.map((course) => {
-    const start = timeToMinutes(course.start);
-    const end = timeToMinutes(course.end);
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return "";
-    const isEvent = course.kind === "event";
-    return `<div class="calendar-background-item ${isEvent ? "event-background" : "course-background"}" ${isEvent ? `data-open-event="${course.id}"` : ""} style="${calendarBlockStyle(start, end)};--event-color:${course.color || "#E8DCD1"}"><strong>${escapeHtml(course.name || course.title)}</strong><span>${course.start}—${course.end}</span></div>`;
-  }).join("");
-  const foreground = laidOut.map(({ task, start, end, lane, laneCount }) => {
-    const owner = task.parentId || task.id;
-    const width = 100 / laneCount;
-    const zIndex = 3 + lane;
-    return `<article class="calendar-task-item ${laneCount > 1 ? "overlapping" : ""} ${task.difficulty === "hard" ? "hard" : ""}" draggable="true" data-calendar-id="${task.id}" data-calendar-parent="${task.parentId || ""}" data-open-task="${owner}" style="${calendarBlockStyle(start, end)}left:${lane * width}%;width:${width}%;z-index:${zIndex};--task-color:${taskColor(task)}"><span class="calendar-task-title">${escapeHtml(task.title)}</span><span class="calendar-task-time">${task.startTime}—${task.endTime}</span><span class="calendar-task-progress">${energyMarkup(taskProgress(task))}</span></article>`;
-  }).join("");
-  return `<div class="week-day-column"><div class="week-day-header"><strong>${DAY_NAMES[parseDate(targetDate).getDay()]}</strong><span>${formatShortDate(targetDate)} · ${dailyProgress(targetDate) == null ? "N/A" : `${dailyProgress(targetDate)}%`}</span></div><div class="week-grid" data-week-date="${targetDate}">${backgrounds}${foreground}</div></div>`;
-}
 function weeklyEntriesForDate(date) {
   const targetDate = dateKey(date);
   const taskEntries = tasksForDate(targetDate).map((task) => ({
@@ -718,89 +660,68 @@ function weeklyEntriesForDate(date) {
   }));
   return [...taskEntries, ...scheduledEntries]
     .filter((entry) => Number.isFinite(entry.start) && Number.isFinite(entry.end) && entry.end > entry.start)
-    .map((entry) => ({ ...entry, start: Math.max(CALENDAR_START, entry.start), end: Math.min(CALENDAR_END, entry.end) }))
+    .map((entry) => ({ ...entry, start: Math.max(WEEK_DAY_START, entry.start), end: Math.min(WEEK_DAY_END, entry.end) }))
     .filter((entry) => entry.end > entry.start)
     .sort((a, b) => a.start - b.start || b.end - a.end || a.title.localeCompare(b.title));
 }
-function splitWeeklyTimeline(entries) {
-  const boundaries = [...new Set(entries.flatMap((entry) => [entry.start, entry.end]))].sort((a, b) => a - b);
-  const segments = [];
-  for (let index = 0; index < boundaries.length - 1; index += 1) {
-    const start = boundaries[index];
-    const end = boundaries[index + 1];
-    if (end <= start) continue;
-    const active = entries.filter((entry) => entry.start < end && entry.end > start);
-    if (!active.length) continue;
-    const sliceKey = `${start}-${end}`;
-    const isFullCollision = active.length > 1 && active.every((entry) => entry.start === start && entry.end === end);
-    active.forEach((entry, lane) => segments.push({
-      entry,
-      start,
-      end,
-      lane,
-      laneCount: active.length,
-      sliceKey,
-      isFullCollision,
-    }));
-  }
-  return segments;
+function layoutWeekEntries(entries) {
+  const sorted = [...entries].sort((a, b) => a.start - b.start || a.end - b.end || a.title.localeCompare(b.title));
+  const groups = [];
+  sorted.forEach((entry) => {
+    const group = groups.find((candidate) => candidate.end > entry.start);
+    if (group) {
+      group.entries.push(entry);
+      group.end = Math.max(group.end, entry.end);
+    } else groups.push({ entries: [entry], end: entry.end });
+  });
+  return groups.flatMap((group) => {
+    const laneEnds = [];
+    const placed = group.entries.map((entry) => {
+      let lane = laneEnds.findIndex((end) => end <= entry.start);
+      if (lane < 0) {
+        lane = laneEnds.length;
+        laneEnds.push(entry.end);
+      } else laneEnds[lane] = entry.end;
+      return { entry, lane };
+    });
+    const laneCount = Math.max(1, laneEnds.length);
+    return placed.map((item) => ({ ...item, laneCount }));
+  });
 }
-function weekSegmentStyle(segment) {
-  const top = Math.max(0, (segment.start - CALENDAR_START) / 5 * CALENDAR_SLOT_HEIGHT);
-  const height = Math.max(28, (segment.end - segment.start) / 5 * CALENDAR_SLOT_HEIGHT);
-  const width = 100 / segment.laneCount;
-  return `top:${top}px;height:${height}px;left:${segment.lane * width}%;width:${width}%;--segment-color:${segment.entry.color};`;
+function weekBlockStyle(item) {
+  const top = (item.entry.start - WEEK_DAY_START) / 60 * WEEK_HOUR_HEIGHT;
+  const height = Math.max(8, (item.entry.end - item.entry.start) / 60 * WEEK_HOUR_HEIGHT);
+  const width = 100 / item.laneCount;
+  return `top:${top}px;height:${height}px;left:${item.lane * width}%;width:${width}%;background:${item.entry.color};`;
 }
-function renderWeeklyDay(date) {
+function renderWeekDayColumn(date) {
   const targetDate = dateKey(date);
   const entries = weeklyEntriesForDate(targetDate);
-  const segments = splitWeeklyTimeline(entries);
-  const hourLines = Array.from({ length: 15 }, (_, index) => `<span class="week-hour-line" style="top:${index * 120}px"><b>${String(8 + index).padStart(2, "0")}:00</b></span>`).join("");
-  const blocks = segments.map((segment) => {
-    const { entry } = segment;
+  const blocks = layoutWeekEntries(entries).map((item) => {
+    const { entry } = item;
     const label = `${entry.title}, ${entry.startLabel} to ${entry.endLabel}`;
-    return `<button type="button" class="week-segment ${segment.isFullCollision ? "split-collision" : ""} ${entry.kind}-segment" data-week-segment data-week-slice="${segment.sliceKey}" data-week-lane="${segment.lane}" aria-label="${escapeHtml(label)}" style="${weekSegmentStyle(segment)}"><span class="week-segment-color"></span><span class="week-segment-copy"><strong>${escapeHtml(entry.title)}</strong><small>${escapeHtml(entry.startLabel)}—${escapeHtml(entry.endLabel)}</small></span></button>`;
+    return `<button type="button" class="week-event-block ${entry.kind}-block" data-week-event data-week-date="${targetDate}" data-week-entry-id="${escapeHtml(entry.id)}" aria-label="${escapeHtml(label)}" style="${weekBlockStyle(item)}"><span class="week-event-swatch" aria-hidden="true"></span></button>`;
   }).join("");
-  const empty = entries.length ? "" : `<div class="week-day-empty">No timed blocks</div>`;
-  return `<section class="week-day-timeline" data-week-date="${targetDate}"><header class="week-day-timeline-header"><div><strong>${DAY_NAMES[parseDate(targetDate).getDay()]}</strong><span>${formatShortDate(targetDate)}</span></div><small>${entries.length} ${entries.length === 1 ? "block" : "blocks"} · ${dailyProgress(targetDate) == null ? "No progress" : `${dailyProgress(targetDate)}% complete`}</small></header><div class="week-day-track" style="height:${(CALENDAR_END - CALENDAR_START) / 5 * CALENDAR_SLOT_HEIGHT}px">${hourLines}${blocks}${empty}</div></section>`;
+  return `<div class="week-day-column-fixed" data-week-date="${targetDate}"><div class="week-day-track-fixed">${blocks}${entries.length ? "" : `<span class="week-day-empty" aria-hidden="true"></span>`}</div></div>`;
 }
 function renderWeekView() {
   const days = weekDatesFor(selectedDate);
-  return `<div class="section-heading"><div><div class="section-kicker">WEEKLY OVERVIEW · COLLISION CHECK</div><h2>${formatDate(days[0], { month: "short", day: "numeric" })} — ${formatDate(days[6], { month: "short", day: "numeric" })}</h2><p class="week-overview-hint">Long bars are cut at every collision boundary. Click a split to inspect the hidden label.</p></div><div class="calendar-nav week-nav"><button class="secondary-button" id="weekPrev">‹ Previous</button><button class="secondary-button" id="weekToday">Today</button><button class="secondary-button" id="weekNext">Next ›</button></div></div><div class="week-timeline-list">${days.map(renderWeeklyDay).join("")}</div>`;
+  const dayHeaders = days.map((date) => `<div class="week-day-header-fixed"><strong>${DAY_NAMES[parseDate(date).getDay()].slice(0, 3)}</strong><span>${formatShortDate(date)}</span></div>`).join("");
+  const timeLabels = Array.from({ length: 25 }, (_, hour) => `<span style="top:${hour * WEEK_HOUR_HEIGHT}px">${String(hour).padStart(2, "0")}:00</span>`).join("");
+  return `<div class="section-heading week-view-heading"><div><div class="section-kicker">WEEK VIEW</div><h2>${formatDate(days[0], { month: "short", day: "numeric" })} — ${formatDate(days[6], { month: "short", day: "numeric" })}</h2></div><div class="calendar-nav week-nav"><button class="secondary-button" id="weekPrev" aria-label="Previous week">‹</button><button class="secondary-button" id="weekToday">Today</button><button class="secondary-button" id="weekNext" aria-label="Next week">›</button></div></div><div class="week-fixed-card"><div class="week-fixed-header"><div class="week-time-corner"></div><div class="week-day-headers">${dayHeaders}</div></div><div class="week-fixed-body"><div class="week-time-rail">${timeLabels}</div><div class="week-fixed-columns">${days.map(renderWeekDayColumn).join("")}</div></div></div>`;
+}
+function openWeekEventSheet(date, entryId) {
+  const entry = weeklyEntriesForDate(date).find((item) => item.id === entryId);
+  if (!entry) return;
+  $("#weekEventTitle").textContent = entry.title;
+  $("#weekEventTime").textContent = `${entry.startLabel} — ${entry.endLabel}`;
+  $("#weekEventType").textContent = entry.kind === "task" ? TYPE_LABEL[entry.task?.type] || "Task" : entry.kind === "course" ? "Course" : "Event";
+  $("#weekEventNotes").textContent = entry.kind === "course" ? [entry.entry?.room, entry.entry?.teacher].filter(Boolean).join(" · ") || "Course block" : entry.kind === "event" ? entry.entry?.notes || "Event block" : `${clampProgress(taskProgress(entry.task))}% complete`;
+  $("#weekEventSheet").showModal();
 }
 function bindWeekView() {
   $("#weekPrev")?.addEventListener("click", () => { selectedDate = addDays(selectedDate, -7); render(); }); $("#weekNext")?.addEventListener("click", () => { selectedDate = addDays(selectedDate, 7); render(); }); $("#weekToday")?.addEventListener("click", () => { selectedDate = todayIso(); render(); });
-  $$(`[data-week-segment]`).forEach((segment) => segment.addEventListener("click", (event) => {
-    event.stopPropagation();
-    const slice = segment.dataset.weekSlice;
-    const siblings = $$(`[data-week-segment][data-week-slice="${slice}"]`);
-    if (siblings.length < 2) return;
-    const alreadyExpanded = segment.classList.contains("is-expanded");
-    siblings.forEach((item) => {
-      item.classList.remove("is-expanded");
-      item.style.left = `${Number(item.dataset.weekLane) * (100 / siblings.length)}%`;
-      item.style.width = `${100 / siblings.length}%`;
-    });
-    if (alreadyExpanded) return;
-    const selectedLane = Number(segment.dataset.weekLane);
-    segment.classList.add("is-expanded");
-    siblings.forEach((item) => {
-      if (item === segment) {
-        item.style.left = `${selectedLane === 0 ? 0 : 22}%`;
-        item.style.width = "78%";
-      } else {
-        item.style.left = `${selectedLane === 0 ? 78 : 0}%`;
-        item.style.width = "22%";
-      }
-    });
-  }));
-  $("#weekView")?.addEventListener("click", (event) => {
-    if (event.target.closest("[data-week-segment]")) return;
-    $$(`[data-week-segment].is-expanded`).forEach((segment) => {
-      const siblings = $$(`[data-week-segment][data-week-slice="${segment.dataset.weekSlice}"]`);
-      siblings.forEach((item) => { item.classList.remove("is-expanded"); item.style.left = `${Number(item.dataset.weekLane) * (100 / siblings.length)}%`; item.style.width = `${100 / siblings.length}%`; });
-    });
-  });
+  $$(`[data-week-event]`).forEach((block) => block.addEventListener("click", () => openWeekEventSheet(block.dataset.weekDate, block.dataset.weekEntryId)));
 }
 function bindEventButtons() { $$('[data-open-event]').forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); openEventDetail(button.dataset.openEvent); })); }
 

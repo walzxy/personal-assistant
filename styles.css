@@ -474,35 +474,40 @@ button.calendar-cell { border: 0; color: inherit; text-align: left; font: inheri
   .calendar-background-item { padding: 4px; font-size: 9px; }
 }
 
-/* Weekly overview: a vertical day-by-day timeline for collision inspection. */
-.week-overview-hint { max-width: 520px; margin-top: 7px; color: var(--muted); font-size: 11px; line-height: 1.5; }
-.week-timeline-list { display: grid; gap: 14px; }
-.week-day-timeline { overflow: hidden; background: #fff; border: 1px solid #e6e1db; border-radius: 17px; box-shadow: var(--shadow); }
-.week-day-timeline-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 15px 17px; border-bottom: 1px solid #ece7e1; background: #fff; }
-.week-day-timeline-header strong { display: block; font: 600 15px "Space Grotesk", Inter, sans-serif; }
-.week-day-timeline-header span, .week-day-timeline-header small { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; }
-.week-day-timeline-header small { margin-top: 0; text-align: right; }
-.week-day-track { position: relative; overflow: hidden; background: repeating-linear-gradient(to bottom, transparent 0, transparent 119px, #ebe8e3 119px, #ebe8e3 120px); }
-.week-hour-line { position: absolute; left: 0; right: 0; height: 1px; pointer-events: none; }
-.week-hour-line b { position: absolute; top: -7px; left: 11px; padding-right: 5px; background: rgba(255,255,255,.78); color: #a1a6a8; font: 500 9px "Space Grotesk", Inter, sans-serif; letter-spacing: .03em; }
-.week-segment { position: absolute; z-index: 2; display: block; overflow: hidden; min-width: 0; padding: 0; border: 0; border-right: 1px solid rgba(255,255,255,.65); border-radius: 0; background: var(--segment-color); color: #fff; text-align: left; transition: left .2s ease, width .2s ease, box-shadow .2s ease, filter .2s ease; cursor: pointer; }
-.week-segment:hover { z-index: 5; filter: saturate(1.05); box-shadow: 0 5px 13px rgba(55,50,43,.15); }
-.week-segment-color { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(255,255,255,.15), transparent); pointer-events: none; }
-.week-segment-copy { position: relative; display: grid; gap: 2px; padding: 7px 9px; opacity: 1; text-shadow: 0 1px 1px rgba(34,43,48,.15); }
-.week-segment-copy strong { overflow: hidden; font-size: 10px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
-.week-segment-copy small { font-size: 9px; line-height: 1.2; white-space: nowrap; }
-.split-collision .week-segment-copy { opacity: 0; transition: opacity .18s ease; }
-.split-collision.is-expanded { z-index: 6; box-shadow: 0 7px 16px rgba(55,50,43,.18); }
-.split-collision.is-expanded .week-segment-copy { opacity: 1; }
-.task-segment { background: var(--segment-color); }
-.course-segment { background: #b7c5cf; color: #44545d; text-shadow: none; }
-.event-segment { background: #cdbba0; color: #594c44; text-shadow: none; }
-.week-day-empty { position: absolute; inset: 0; display: grid; place-items: center; color: #adb2b2; font-size: 11px; pointer-events: none; }
+/* Week View v3: fixed seven-column grid, 00:00–24:00 vertical scroll. */
+.week-view-heading { align-items: center; }
+.week-fixed-card { width: 100%; max-width: 100%; overflow: hidden; background: #fff; border: 1px solid #e6e1db; border-radius: 16px; box-shadow: var(--shadow); }
+.week-fixed-header, .week-fixed-body { display: grid; grid-template-columns: 43px minmax(0, 1fr); min-width: 0; }
+.week-fixed-header { border-bottom: 1px solid #e7e3de; }
+.week-time-corner { border-right: 1px solid #eeeae5; background: #faf9f6; }
+.week-day-headers, .week-fixed-columns { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); min-width: 0; }
+.week-day-header-fixed { min-width: 0; padding: 12px 3px 10px; border-right: 1px solid #eeeae5; text-align: center; }
+.week-day-header-fixed strong, .week-day-header-fixed span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.week-day-header-fixed strong { color: var(--ink); font: 600 11px "Space Grotesk", Inter, sans-serif; }
+.week-day-header-fixed span { margin-top: 4px; color: var(--muted); font-size: 9px; }
+.week-time-rail { position: relative; height: 1920px; border-right: 1px solid #eeeae5; background: #faf9f6; }
+.week-time-rail span { position: absolute; right: 6px; transform: translateY(-6px); color: #a6abad; font: 400 8px "Space Grotesk", Inter, sans-serif; font-variant-numeric: tabular-nums; }
+.week-fixed-columns { overflow: hidden; }
+.week-day-column-fixed { min-width: 0; border-right: 1px solid #eeeae5; }
+.week-day-track-fixed { position: relative; height: 1920px; min-width: 0; overflow: hidden; background-color: #fff; background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 79px, #eeeae5 79px, #eeeae5 80px); }
+.week-day-track-fixed::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(to bottom, transparent 0, transparent 39px, rgba(238,234,229,.45) 39px, rgba(238,234,229,.45) 40px); }
+.week-event-block { position: absolute; z-index: 2; display: block; min-width: 0; padding: 0; border: 1px solid rgba(255,255,255,.72); border-radius: 7px; box-shadow: 0 2px 7px rgba(58,67,70,.08); cursor: pointer; transition: filter .18s ease, box-shadow .18s ease; }
+.week-event-block:hover, .week-event-block:focus-visible { z-index: 4; filter: saturate(1.08) brightness(1.03); box-shadow: 0 5px 14px rgba(58,67,70,.2); outline: 2px solid rgba(89,107,120,.28); outline-offset: 1px; }
+.week-event-swatch { display: block; width: 100%; height: 100%; background: linear-gradient(135deg, rgba(255,255,255,.14), transparent 55%); }
+.week-day-empty { display: none; }
+.week-event-sheet { width: min(390px, calc(100vw - 30px)); }
+.week-event-sheet-content { display: grid; gap: 15px; padding: 2px 0 5px; }
+.week-event-sheet-content > div { display: grid; gap: 5px; }
+.week-event-sheet-content span { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+.week-event-sheet-content strong { color: var(--ink); font: 600 18px "Space Grotesk", Inter, sans-serif; }
+.week-event-sheet-content p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 @media (max-width: 760px) {
-  .week-day-timeline-header { padding: 13px 14px; }
-  .week-day-timeline-header strong { font-size: 14px; }
-  .week-hour-line b { left: 7px; font-size: 8px; }
-  .week-segment-copy { padding: 6px 7px; }
-  .week-segment-copy strong { font-size: 9px; }
-  .week-segment-copy small { font-size: 8px; }
+  .week-fixed-header, .week-fixed-body { grid-template-columns: 35px minmax(0, 1fr); }
+  .week-day-header-fixed { padding: 10px 2px 9px; }
+  .week-day-header-fixed strong { font-size: 9px; }
+  .week-day-header-fixed span { font-size: 8px; }
+  .week-time-rail { height: 1920px; }
+  .week-time-rail span { right: 4px; font-size: 7px; }
+  .week-event-block { border-radius: 5px; }
+  .week-event-sheet { width: 100%; max-width: none; margin: auto auto 0; border-radius: 18px 18px 0 0; }
 }
