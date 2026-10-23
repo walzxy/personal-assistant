@@ -512,19 +512,30 @@ function openEventDetail(eventId = null) { const event = (state.events || []).fi
 function saveEventForm(event) { event.preventDefault(); if (event.submitter?.value === "cancel") { $("#eventModal").close(); currentEventId = null; return; } const title = $("#eventTitle").value.trim(); const date = $("#eventDate").value; const start = $("#eventStart").value; const end = $("#eventEnd").value; if (!title || !date || !start || !end) return; if (timeToMinutes(end) <= timeToMinutes(start)) { toast("End time must be after start time."); return; } const wasEditing = Boolean(currentEventId); state.events ||= []; const record = { id: currentEventId || uid("event"), name: title, title, date, start, end, color: $("#eventColor").value, notes: $("#eventNotes").value.trim(), kind: "event" }; if (currentEventId) { const index = state.events.findIndex((item) => item.id === currentEventId); if (index >= 0) state.events[index] = { ...state.events[index], ...record }; } else state.events.push(record); saveState(); $("#eventModal").close(); selectedDate = date; currentTab = "week"; render(); toast(wasEditing ? "Event updated." : "Event added."); currentEventId = null; }
 function deleteEvent() { if (!currentEventId) return; const event = state.events.find((item) => item.id === currentEventId); if (!event) return; state.events = state.events.filter((item) => item.id !== currentEventId); saveState(); $("#eventModal").close(); currentEventId = null; render(); toast("Event deleted."); }
 function layoutCalendarTasks(tasks) {
-  const sorted = [...tasks].sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime) || timeToMinutes(a.endTime) - timeToMinutes(b.endTime));
+  const sorted = [...tasks]
+    .map((task) => ({ task, start: timeToMinutes(task.startTime), end: timeToMinutes(task.endTime) }))
+    .filter((item) => Number.isFinite(item.start) && Number.isFinite(item.end) && item.end > item.start)
+    .sort((a, b) => a.start - b.start || a.end - b.end);
   const components = [];
-  sorted.forEach((task) => {
-    const start = timeToMinutes(task.startTime); const end = timeToMinutes(task.endTime);
-    const component = components.find((group) => group.maxEnd > start);
-    if (component) { component.items.push({ task, start, end }); component.maxEnd = Math.max(component.maxEnd, end); }
-    else components.push({ items: [{ task, start, end }], maxEnd: end });
+  sorted.forEach((item) => {
+    const component = components.find((group) => group.maxEnd > item.start);
+    if (component) {
+      component.items.push(item);
+      component.maxEnd = Math.max(component.maxEnd, item.end);
+    } else {
+      components.push({ items: [item], maxEnd: item.end });
+    }
   });
   return components.flatMap((component) => {
     const lanes = [];
     const placed = component.items.map((item) => {
       let lane = lanes.findIndex((lastEnd) => item.start >= lastEnd);
-      if (lane < 0) { lane = lanes.length; lanes.push(item.end); } else lanes[lane] = item.end;
+      if (lane === -1) {
+        lane = lanes.length;
+        lanes.push(item.end);
+      } else {
+        lanes[lane] = item.end;
+      }
       return { ...item, lane };
     });
     const laneCount = Math.max(1, lanes.length);
@@ -532,46 +543,99 @@ function layoutCalendarTasks(tasks) {
   });
 }
 function calendarBlockStyle(start, end) { const top = Math.max(0, (start - CALENDAR_START) / 5 * CALENDAR_SLOT_HEIGHT); const height = Math.max(25, (end - start) / 5 * CALENDAR_SLOT_HEIGHT); return `top:${top}px;height:${height}px;`; }
-function calendarTaskWindow(task) { const start = timeToMinutes(task.startTime); const rawEnd = timeToMinutes(task.endTime); if (start == null) return null; const end = rawEnd == null ? Math.min(CALENDAR_END, start + Math.max(30, Number(task.estimateHours || 0.5) * 60)) : Math.max(start + 5, rawEnd); return { start, end }; }
 function renderCalendarDay(date) {
-  const targetDate = dateKey(date); const { courses, tasks } = calendarItemsForDate(targetDate); const timedTasks = tasks.map((task) => { const window = calendarTaskWindow(task); return window ? { ...task, startTime: minutesToTime(window.start), endTime: minutesToTime(window.end) } : null; }).filter(Boolean); const unscheduled = tasks.filter((task) => !calendarTaskWindow(task)); const laidOut = layoutCalendarTasks(timedTasks); const backgrounds = courses.map((course) => `<div class="calendar-background-item ${course.kind === "event" ? "event-background" : ""}" ${course.kind === "event" ? `data-open-event="${course.id}"` : ""} style="${calendarBlockStyle(timeToMinutes(course.start), timeToMinutes(course.end))};--event-color:${course.color || "#E8DCD1"}"><strong>${escapeHtml(course.name || course.title)}</strong><span>${course.start}—${course.end}</span></div>`).join(""); const foreground = laidOut.map(({ task, start, end, lane, laneCount }) => { const owner = task.parentId || task.id; const width = 100 / laneCount; return `<article class="calendar-task-item ${laneCount > 1 ? "overlapping" : ""} ${task.difficulty === "hard" ? "hard" : ""}" draggable="true" data-calendar-id="${task.id}" data-calendar-parent="${task.parentId || ""}" data-open-task="${owner}" style="${calendarBlockStyle(start, end)}left:${lane * width}%;width:${width}%;--task-color:${taskColor(task)}"><span class="calendar-task-title">${escapeHtml(task.title)}</span><span class="calendar-task-time">${task.startTime}—${task.endTime}</span><span class="calendar-task-progress">${energyMarkup(taskProgress(task))}</span></article>`; }).join(""); const unscheduledMarkup = unscheduled.length ? `<div class="week-unscheduled">${unscheduled.map((task) => `<button type="button" class="calendar-unscheduled-task" data-open-task="${task.parentId || task.id}" style="--task-color:${taskColor(task)}"><span class="task-color-dot"></span><span class="calendar-unscheduled-title">${escapeHtml(task.title)}</span><small>Planned</small></button>`).join("")}</div>` : ""; return `<div class="week-day-column"><div class="week-day-header"><strong>${DAY_NAMES[parseDate(targetDate).getDay()]}</strong><span>${formatShortDate(targetDate)} · ${dailyProgress(targetDate) == null ? "N/A" : `${dailyProgress(targetDate)}%`}</span></div>${unscheduledMarkup}<div class="week-grid" data-week-date="${targetDate}">${backgrounds}${foreground}</div></div>`;
+  const targetDate = dateKey(date);
+  const { courses, tasks } = calendarItemsForDate(targetDate);
+  const timedTasks = tasks.filter((task) => {
+    const start = timeToMinutes(task.startTime);
+    const end = timeToMinutes(task.endTime);
+    return Number.isFinite(start) && Number.isFinite(end) && end > start;
+  });
+  const laidOut = layoutCalendarTasks(timedTasks);
+  const backgrounds = courses.map((course) => {
+    const start = timeToMinutes(course.start);
+    const end = timeToMinutes(course.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return "";
+    const isEvent = course.kind === "event";
+    return `<div class="calendar-background-item ${isEvent ? "event-background" : "course-background"}" ${isEvent ? `data-open-event="${course.id}"` : ""} style="${calendarBlockStyle(start, end)};--event-color:${course.color || "#E8DCD1"}"><strong>${escapeHtml(course.name || course.title)}</strong><span>${course.start}—${course.end}</span></div>`;
+  }).join("");
+  const foreground = laidOut.map(({ task, start, end, lane, laneCount }) => {
+    const owner = task.parentId || task.id;
+    const width = 100 / laneCount;
+    const zIndex = 3 + lane;
+    return `<article class="calendar-task-item ${laneCount > 1 ? "overlapping" : ""} ${task.difficulty === "hard" ? "hard" : ""}" draggable="true" data-calendar-id="${task.id}" data-calendar-parent="${task.parentId || ""}" data-open-task="${owner}" style="${calendarBlockStyle(start, end)}left:${lane * width}%;width:${width}%;z-index:${zIndex};--task-color:${taskColor(task)}"><span class="calendar-task-title">${escapeHtml(task.title)}</span><span class="calendar-task-time">${task.startTime}—${task.endTime}</span><span class="calendar-task-progress">${energyMarkup(taskProgress(task))}</span></article>`;
+  }).join("");
+  return `<div class="week-day-column"><div class="week-day-header"><strong>${DAY_NAMES[parseDate(targetDate).getDay()]}</strong><span>${formatShortDate(targetDate)} · ${dailyProgress(targetDate) == null ? "N/A" : `${dailyProgress(targetDate)}%`}</span></div><div class="week-grid" data-week-date="${targetDate}">${backgrounds}${foreground}</div></div>`;
 }
 function renderWeekView() {
   const days = weekDatesFor(selectedDate); const labels = Array.from({ length: 15 }, (_, index) => `${String(8 + index).padStart(2, "0")}:00`);
-  return `<div class="section-heading"><div><div class="section-kicker">WEEKLY CALENDAR · 5 MIN SNAP</div><h2>${formatDate(days[0], { month: "short", day: "numeric" })} — ${formatDate(days[6], { month: "short", day: "numeric" })}</h2></div><div class="calendar-nav"><button class="secondary-button" id="weekPrev">‹ Previous</button><button class="secondary-button" id="weekToday">Today</button><button class="secondary-button" id="weekNext">Next ›</button></div></div><div class="week-calendar-card"><div class="week-calendar-scroll"><div class="week-calendar"><div class="week-axis"><div class="week-axis-head"></div><div class="week-axis-labels">${labels.map((label) => `<span>${label}</span>`).join("")}</div></div><div class="week-day-columns">${days.map(renderCalendarDay).join("")}</div></div></div></div>`;
+  return `<div class="section-heading"><div><div class="section-kicker">WEEKLY CALENDAR · 5 MIN SNAP</div><h2>${formatDate(days[0], { month: "short", day: "numeric" })} — ${formatDate(days[6], { month: "short", day: "numeric" })}</h2></div><div class="calendar-nav week-nav"><button class="secondary-button" id="weekPrev">‹ Previous</button><button class="secondary-button" id="weekToday">Today</button><button class="secondary-button" id="weekNext">Next ›</button></div></div><div class="week-calendar-card"><div class="week-calendar-scroll"><div class="week-calendar"><div class="week-axis"><div class="week-axis-head"></div><div class="week-axis-labels">${labels.map((label) => `<span>${label}</span>`).join("")}</div></div><div class="week-day-columns">${days.map(renderCalendarDay).join("")}</div></div></div></div>`;
 }
 function bindWeekView() {
   $("#weekPrev")?.addEventListener("click", () => { selectedDate = addDays(selectedDate, -7); render(); }); $("#weekNext")?.addEventListener("click", () => { selectedDate = addDays(selectedDate, 7); render(); }); $("#weekToday")?.addEventListener("click", () => { selectedDate = todayIso(); render(); });
-  $$(`[data-open-task]`).filter((element) => element.classList.contains("calendar-unscheduled-task")).forEach((button) => button.addEventListener("click", () => openTaskDetail(button.dataset.openTask, true)));
   const moveCalendarTask = (payload, grid, clientY) => {
     const source = boardItems().find((item) => item.id === payload.id && (item.parentId || "") === (payload.parentId || ""));
     if (!source || !grid) return;
-    const duration = Math.max(5, (timeToMinutes(source.endTime) || timeToMinutes(source.startTime) + 30) - (timeToMinutes(source.startTime) || CALENDAR_START));
-    const rect = grid.getBoundingClientRect(); const scrollTop = grid.parentElement?.scrollTop || 0;
-    const minute = snapToFive(CALENDAR_START + ((clientY - rect.top + scrollTop) / CALENDAR_SLOT_HEIGHT) * 5);
+    const sourceStart = timeToMinutes(source.startTime);
+    const sourceEnd = timeToMinutes(source.endTime);
+    if (!Number.isFinite(sourceStart) || !Number.isFinite(sourceEnd) || sourceEnd <= sourceStart) return;
+    const duration = Math.max(5, sourceEnd - sourceStart);
+    const rect = grid.getBoundingClientRect();
+    const scrollTop = grid.parentElement?.scrollTop || 0;
+    const rawMinute = CALENDAR_START + ((clientY - rect.top + scrollTop) / CALENDAR_SLOT_HEIGHT) * 5;
+    const minute = snapToFive(rawMinute);
     const start = Math.max(CALENDAR_START, Math.min(CALENDAR_END - duration, minute)); const end = start + duration;
     if (updateScheduledDate(source, grid.dataset.weekDate, minutesToTime(start), minutesToTime(end))) { saveState(); selectedDate = grid.dataset.weekDate; render(); toast(`Moved to ${minutesToTime(start)}.`); }
   };
   $$(`[data-calendar-id]`).forEach((block) => {
     block.addEventListener("dragstart", (event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", JSON.stringify({ id: block.dataset.calendarId, parentId: block.dataset.calendarParent })); });
-    block.addEventListener("click", () => openTaskDetail(block.dataset.openTask, true));
-    let holdTimer = null; let touchDrag = false; let touchPayload = null;
+    block.addEventListener("dragend", () => block.classList.remove("touch-dragging"));
+    let touchState = null;
+    let holdTimer = null;
+    let suppressClick = false;
+    const clearTouchState = () => {
+      window.clearTimeout(holdTimer);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerCancel);
+      block.classList.remove("touch-dragging");
+      touchState = null;
+    };
+    const onPointerMove = (event) => {
+      if (!touchState || event.pointerId !== touchState.pointerId) return;
+      const distance = Math.hypot(event.clientX - touchState.startX, event.clientY - touchState.startY);
+      if (!touchState.dragging) {
+        if (distance > 8) window.clearTimeout(holdTimer);
+        return;
+      }
+      event.preventDefault();
+    };
+    const onPointerUp = (event) => {
+      if (!touchState || event.pointerId !== touchState.pointerId) return;
+      if (touchState.dragging) {
+        event.preventDefault();
+        suppressClick = true;
+        const grid = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-week-date]") || block.closest("[data-week-date]");
+        moveCalendarTask(touchState.payload, grid, event.clientY);
+        window.setTimeout(() => { suppressClick = false; }, 0);
+      }
+      clearTouchState();
+    };
+    const onPointerCancel = (event) => { if (!touchState || event.pointerId !== touchState.pointerId) return; clearTouchState(); };
+    block.addEventListener("click", () => { if (!suppressClick) openTaskDetail(block.dataset.openTask, true); });
     block.addEventListener("pointerdown", (event) => {
       if (event.pointerType === "mouse") return;
-      touchPayload = { id: block.dataset.calendarId, parentId: block.dataset.calendarParent };
-      touchDrag = false;
-      holdTimer = window.setTimeout(() => { touchDrag = true; block.classList.add("touch-dragging"); block.setPointerCapture?.(event.pointerId); }, 360);
+      touchState = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, dragging: false, payload: { id: block.dataset.calendarId, parentId: block.dataset.calendarParent } };
+      holdTimer = window.setTimeout(() => {
+        if (!touchState) return;
+        touchState.dragging = true;
+        block.classList.add("touch-dragging");
+        block.setPointerCapture?.(event.pointerId);
+      }, 450);
+      window.addEventListener("pointermove", onPointerMove, { passive: false });
+      window.addEventListener("pointerup", onPointerUp, { passive: false });
+      window.addEventListener("pointercancel", onPointerCancel, { passive: false });
     }, { passive: true });
-    block.addEventListener("pointermove", (event) => {
-      if (!touchDrag) { if (Math.abs(event.movementY || 0) > 8) window.clearTimeout(holdTimer); return; }
-      event.preventDefault();
-    }, { passive: false });
-    block.addEventListener("pointerup", (event) => {
-      window.clearTimeout(holdTimer);
-      if (touchDrag) { event.preventDefault(); const grid = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-week-date]") || block.closest("[data-week-date]"); moveCalendarTask(touchPayload, grid, event.clientY); }
-      block.classList.remove("touch-dragging"); touchDrag = false; touchPayload = null;
-    }, { passive: false });
-    block.addEventListener("pointercancel", () => { window.clearTimeout(holdTimer); block.classList.remove("touch-dragging"); touchDrag = false; touchPayload = null; });
   });
   $$(`[data-week-date]`).forEach((grid) => grid.addEventListener("dragover", (event) => event.preventDefault()));
   $$(`[data-week-date]`).forEach((grid) => grid.addEventListener("drop", (event) => { event.preventDefault(); try { moveCalendarTask(JSON.parse(event.dataTransfer.getData("text/plain")), grid, event.clientY); } catch (error) { console.warn("Calendar drop ignored", error); } }));
