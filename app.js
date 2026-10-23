@@ -869,7 +869,7 @@ function renderLongTermReadonlyTaskDetail(task) {
   const estimatedMinutes = Math.round((Number(task.estimateHours) || 0) * 60);
   const actualDuration = trackedMinutes(task);
   const children = task.children || [];
-  return `<div class="detail-readonly long-term-detail"><div class="detail-intro" style="--task-color:${taskColor(task)}"><div class="detail-label">${TYPE_LABEL[task.type] || "Long-term task"}</div><p class="detail-description">${escapeHtml(task.notes || "No notes added yet.")}</p></div>${detailScheduleMarkup(task, estimatedMinutes)}${detailStatusMarkup(task, progress)}<div class="detail-block detail-time-comparison"><div class="detail-block-header"><div><div class="detail-label">Focus time</div></div><button type="button" class="detail-inline-button" data-open-time-log="${task.id}" data-time-child="">Edit actual</button></div><div class="detail-focus-metrics"><div><strong>${formatTrackedMinutes(actualDuration)}</strong><span>Actual</span></div><div><strong>${formatTrackedMinutes(estimatedMinutes)}</strong><span>Estimated</span></div></div><div class="time-comparison-track"><span style="width:${estimatedMinutes ? Math.min(100, actualDuration / estimatedMinutes * 100) : 0}%"></span></div></div><div class="detail-block detail-stages-block"><div class="detail-block-header"><div><div class="detail-label">Stages</div><div class="detail-value">Subtask timeline</div></div><span class="muted-label">${children.length} ${children.length === 1 ? "stage" : "stages"}</span></div><div class="long-term-stage-timeline">${children.length ? children.map((child) => `<div class="long-term-stage-row ${child.status === "done" ? "done" : ""}"><button type="button" class="long-term-stage-toggle" data-toggle-child="${task.id}" data-child-id="${child.id}" aria-label="${child.status === "done" ? "Mark incomplete" : "Mark complete"}">${child.status === "done" ? "✓" : "○"}</button><div class="long-term-stage-copy"><strong>${escapeHtml(child.title)}</strong><span>${escapeHtml(child.date ? formatEnglishDate(child.date) : "Date not set")}</span></div><button type="button" class="long-term-stage-time" data-open-time-log="${task.id}" data-time-child="${child.id}" aria-label="Log actual time">◷</button></div>`).join("") : `<div class="detail-help">No stages yet.</div>`}</div></div><div class="detail-help">Progress is read-only and derived from completed stage estimate time.</div></div>`;
+  return `<div class="detail-readonly long-term-detail"><div class="detail-intro" style="--task-color:${taskColor(task)}"><div class="detail-label">${TYPE_LABEL[task.type] || "Long-term task"}</div><p class="detail-description">${escapeHtml(task.notes || "No notes added yet.")}</p></div>${detailScheduleMarkup(task, estimatedMinutes)}${detailStatusMarkup(task, progress)}<div class="detail-block detail-time-comparison"><div class="detail-block-header"><div><div class="detail-label">Focus time</div></div><button type="button" class="detail-inline-button" data-open-time-log="${task.id}" data-time-child="">Edit actual</button></div><div class="detail-focus-metrics"><div><strong>${formatTrackedMinutes(actualDuration)}</strong><span>Actual</span></div><div><strong>${formatTrackedMinutes(estimatedMinutes)}</strong><span>Estimated</span></div></div><div class="time-comparison-track"><span style="width:${estimatedMinutes ? Math.min(100, actualDuration / estimatedMinutes * 100) : 0}%"></span></div></div><div class="detail-block detail-stages-block"><div class="detail-block-header"><div><div class="detail-label">Stages</div><div class="detail-value">Subtask timeline</div></div><span class="muted-label">${children.length} ${children.length === 1 ? "stage" : "stages"}</span></div><div class="long-term-stage-timeline">${children.length ? children.map((child) => `<div class="long-term-stage-row ${child.status === "done" ? "done" : ""}"><button type="button" class="long-term-stage-toggle" data-toggle-child="${task.id}" data-child-id="${child.id}" aria-label="${child.status === "done" ? "Mark incomplete" : "Mark complete"}">${child.status === "done" ? "✓" : "○"}</button><div class="long-term-stage-copy"><strong>${escapeHtml(child.title)}</strong><span>${escapeHtml(child.date ? formatEnglishDate(child.date) : "Date not set")} · ${formatTrackedMinutes(child.actualDuration)} / ${formatTrackedMinutes(Math.round((Number(child.estimateHours) || 0) * 60))}</span></div><button type="button" class="long-term-stage-time" data-open-time-log="${task.id}" data-time-child="${child.id}" aria-label="Log actual time">◷</button></div>`).join("") : `<div class="detail-help">No stages yet.</div>`}</div></div><div class="detail-help">Progress is read-only and derived from completed stage estimate time.</div></div>`;
 }
 function renderReadonlyTaskDetail(task) {
   if (task.type === "long-term") return renderLongTermReadonlyTaskDetail(task);
@@ -877,16 +877,13 @@ function renderReadonlyTaskDetail(task) {
   const estimatedMinutes = Math.round((Number(task.estimateHours) || 0) * 60);
   const actualDuration = trackedMinutes(task);
   const stages = task.children?.length ? task.children : [{ title: task.title, status: task.status, progress, startTime: task.startTime, endTime: task.endTime, date: task.scheduledDate, actualDuration }];
-  return `<div class="detail-readonly"><div class="detail-intro" style="--task-color:${taskColor(task)}"><div class="detail-label">${TYPE_LABEL[task.type] || "Task"}</div><p class="detail-description">${escapeHtml(task.notes || "No notes added yet.")}</p></div>${detailScheduleMarkup(task, estimatedMinutes)}${detailStatusMarkup(task, progress)}<div class="detail-block detail-time-comparison"><div class="detail-block-header"><div><div class="detail-label">Focus time</div></div><button type="button" class="detail-inline-button" data-open-time-log="${task.id}" data-time-child="">Edit actual</button></div><div class="detail-focus-metrics"><div><strong>${formatTrackedMinutes(actualDuration)}</strong><span>Actual</span></div><div><strong>${formatTrackedMinutes(estimatedMinutes)}</strong><span>Estimated</span></div></div><div class="time-comparison-track"><span style="width:${estimatedMinutes ? Math.min(100, actualDuration / estimatedMinutes * 100) : 0}%"></span></div></div><div class="detail-block detail-stages-block"><div class="detail-block-header"><div><div class="detail-label">Stages</div><div class="detail-value">Subtask timeline</div></div><span class="muted-label">${stages.length} ${stages.length === 1 ? "stage" : "stages"}</span></div><div class="task-stage-timeline">${stages.map((stage) => `<div class="task-stage ${stage.status === "done" ? "done" : ""}"><span class="task-stage-marker">${stage.status === "done" ? "✓" : ""}</span><div class="task-stage-content"><strong>${escapeHtml(stage.title)}</strong><span>${escapeHtml(stage.date ? formatEnglishDate(stage.date) : "Date not set")} · ${escapeHtml(detailTimeLabel(stage.startTime, stage.endTime))}</span><small>${stage.status === "done" ? "Completed" : `${clampProgress(stage.progress)}% complete`} · ${formatTrackedMinutes(stage.actualDuration ?? 0)} focused</small></div></div>`).join("")}</div></div><div class="detail-actions"><span class="detail-label detail-action-label">Update progress</span><button type="button" data-set-progress="${task.id}" data-progress="25">25%</button><button type="button" data-set-progress="${task.id}" data-progress="50">50%</button><button type="button" data-set-progress="${task.id}" data-progress="75">75%</button></div></div>`;
+  return `<div class="detail-readonly"><div class="detail-intro" style="--task-color:${taskColor(task)}"><div class="detail-label">${TYPE_LABEL[task.type] || "Task"}</div><p class="detail-description">${escapeHtml(task.notes || "No notes added yet.")}</p></div>${detailScheduleMarkup(task, estimatedMinutes)}${detailStatusMarkup(task, progress)}<div class="detail-block detail-time-comparison"><div class="detail-block-header"><div><div class="detail-label">Focus time</div></div><button type="button" class="detail-inline-button" data-open-time-log="${task.id}" data-time-child="">Edit actual</button></div><div class="detail-focus-metrics"><div><strong>${formatTrackedMinutes(actualDuration)}</strong><span>Actual</span></div><div><strong>${formatTrackedMinutes(estimatedMinutes)}</strong><span>Estimated</span></div></div><div class="time-comparison-track"><span style="width:${estimatedMinutes ? Math.min(100, actualDuration / estimatedMinutes * 100) : 0}%"></span></div></div><div class="detail-block detail-stages-block"><div class="detail-block-header"><div><div class="detail-label">Stages</div><div class="detail-value">Subtask timeline</div></div><span class="muted-label">${stages.length} ${stages.length === 1 ? "stage" : "stages"}</span></div><div class="task-stage-timeline">${stages.map((stage) => `<div class="task-stage ${stage.status === "done" ? "done" : ""}"><span class="task-stage-marker">${stage.status === "done" ? "✓" : ""}</span><div class="task-stage-content"><strong>${escapeHtml(stage.title)}</strong><span>${escapeHtml(stage.date ? formatEnglishDate(stage.date) : "Date not set")} · ${formatTrackedMinutes(stage.actualDuration ?? 0)} / ${formatTrackedMinutes(Math.round((Number(stage.estimateHours) || Number(task.estimateHours) || 0) * 60))}</span></div></div>`).join("")}</div></div><div class="detail-actions"><span class="detail-label detail-action-label">Update progress</span><button type="button" data-set-progress="${task.id}" data-progress="25">25%</button><button type="button" data-set-progress="${task.id}" data-progress="50">50%</button><button type="button" data-set-progress="${task.id}" data-progress="75">75%</button></div></div>`;
 }
 function renderEditableTaskDetail(task) {
-  const progress = progressForTask(task);
-  const childBlock = ["regular", "long-term"].includes(task.type) ? `<div class="detail-block"><div class="detail-block-header"><div><div class="detail-label">Subtasks</div><div class="detail-help">${task.type === "regular" ? "Up to 3 same-level subtasks, each with a date." : "Each subtask contributes to the long-term count."}</div></div><button type="button" class="detail-inline-button" id="addSubtaskButton" ${task.type === "regular" && (task.children || []).length >= 3 ? "disabled" : ""}>+ Add subtask</button></div><div class="subtask-editor">${(task.children || []).map((child, index) => `<div class="subtask-row"><input data-child-index="${index}" data-child-field="title" value="${escapeHtml(child.title)}" aria-label="子任务名称" placeholder="Subtask title" /><input data-child-index="${index}" data-child-field="date" type="date" value="${child.date || task.scheduledDate || selectedDate}" aria-label="子任务日期" /><input data-child-index="${index}" data-child-field="startTime" type="time" value="${child.startTime || ""}" aria-label="子任务开始时间" /><input data-child-index="${index}" data-child-field="endTime" type="time" value="${child.endTime || ""}" aria-label="子任务结束时间" /><input data-child-index="${index}" data-child-field="progress" type="number" min="0" max="100" step="5" inputmode="numeric" value="${child.progress || 0}" aria-label="子任务进度" /><div class="subtask-row-actions">${child.progress >= 100 && child.status !== "done" ? `<button type="button" class="detail-inline-button" data-confirm-child="${index}">Confirm</button>` : ""}<button type="button" class="icon-button" data-remove-child="${index}" aria-label="删除子任务">×</button></div></div>`).join("") || `<div class="detail-help">No subtasks yet.</div>`}</div></div>` : "";
-  const isDerivedProgress = task.type === "long-term";
-  const progressEditor = isDerivedProgress
-    ? `<div class="progress-editor"><div class="detail-label">Progress</div><div class="readonly-field progress-readonly" id="editProgressReadonly">${progress}%</div><div class="detail-help">Long-term progress is calculated from completed subtasks.</div></div>`
-    : `<div class="progress-editor"><div class="detail-label">${task.type === "regular" && task.children?.length ? "Parent progress override" : "Progress"}</div><div class="progress-quick-actions" role="group" aria-label="Quick progress"><button type="button" class="${progress === 0 ? "active" : ""}" data-edit-progress="0">0%</button><button type="button" class="${progress === 25 ? "active" : ""}" data-edit-progress="25">25%</button><button type="button" class="${progress === 50 ? "active" : ""}" data-edit-progress="50">50%</button><button type="button" class="${progress === 75 ? "active" : ""}" data-edit-progress="75">75%</button></div><input id="editProgress" type="hidden" value="${progress}" /><div class="detail-progress" id="detailProgressPreview">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div>${task.type === "regular" && task.children?.length ? `<div class="detail-help">Choose a preset percentage for the parent. Child completion remains the source of truth when no override is needed.</div>` : ""}</div>`;
-  return `<div class="detail-block"><div class="form-grid"><label>Title<input id="editTitle" value="${escapeHtml(task.title)}" maxlength="120" /></label><label>Type<div class="readonly-field">${TYPE_LABEL[task.type]}</div></label><label>Planned date<input id="editScheduledDate" type="date" value="${task.scheduledDate || selectedDate}" /></label><label>Deadline<input id="editDeadline" type="date" value="${task.deadline || ""}" /></label><label>Estimated hours<input id="editEstimateHours" type="number" min="0.25" step="0.25" value="${task.estimateHours || 1}" /></label><label>Difficulty<select id="editDifficulty"><option value="simple" ${task.difficulty === "simple" ? "selected" : ""}>Simple</option><option value="normal" ${task.difficulty === "normal" ? "selected" : ""}>Normal</option><option value="hard" ${task.difficulty === "hard" ? "selected" : ""}>Hard</option></select></label><label>Task color<select id="editTagColor">${tagColorOptions(taskColor(task))}</select></label><label>Start time<input id="editStartTime" type="time" value="${task.startTime || ""}" /></label><label>End time<input id="editEndTime" type="time" value="${task.endTime || ""}" /></label></div><label>Notes<textarea id="editNotes" rows="3">${escapeHtml(task.notes || "")}</textarea></label>${progressEditor}</div>${childBlock}<div class="detail-actions"><button type="button" class="detail-inline-button" data-open-time-log="${task.id}" data-time-child="">Edit actual time</button></div>`;
+  const selectedColor = taskColor(task);
+  const colorOptions = TAG_COLORS.map((color) => `<button type="button" class="task-edit-color-option ${color === selectedColor ? "active" : ""}" data-edit-color="${color}" aria-label="Select task color ${color}"><span style="background:${color}"></span></button>`).join("");
+  const childBlock = ["regular", "long-term"].includes(task.type) ? `<section class="task-edit-section task-edit-subtask-section"><div class="task-edit-section-heading"><div><div class="detail-label">SUBTASKS</div><div class="task-edit-section-title">Keep the next step small.</div></div><button type="button" class="detail-inline-button" id="addSubtaskButton" ${task.type === "regular" && (task.children || []).length >= 3 ? "disabled" : ""}>+ Add subtask</button></div><div class="task-edit-subtasks">${(task.children || []).map((child, index) => `<div class="task-edit-subtask-row"><input data-child-index="${index}" data-child-field="title" value="${escapeHtml(child.title)}" aria-label="Subtask title" placeholder="Subtask title" /><input data-child-index="${index}" data-child-field="date" type="date" value="${child.date || task.scheduledDate || selectedDate}" aria-label="Subtask date" /><label class="task-edit-duration-field"><input data-child-index="${index}" data-child-field="estimateHours" type="number" min="0.25" step="0.25" inputmode="decimal" value="${Number(child.estimateHours) || 1}" aria-label="Subtask estimated hours" /><span>h</span></label><button type="button" class="subtask-delete" data-remove-child="${index}" aria-label="Delete subtask">⌫</button></div>`).join("") || `<div class="detail-help">No subtasks yet.</div>`}</div></section>` : "";
+  return `<div class="task-edit-layout"><div class="task-edit-title-field"><span class="detail-label">${escapeHtml(TYPE_LABEL[task.type] || "TASK")}</span><input class="task-edit-title" id="editTitle" value="${escapeHtml(task.title)}" maxlength="120" aria-label="Task title" placeholder="Task title" /></div><div class="task-edit-grid-two"><label>Planned date<input id="editScheduledDate" type="date" value="${task.scheduledDate || selectedDate}" /></label><label>Deadline<input id="editDeadline" type="date" value="${task.deadline || ""}" /></label></div><div class="task-edit-grid-two"><label>Estimated hours<input id="editEstimateHours" type="number" min="0.25" step="0.25" value="${task.estimateHours || 1}" /></label><label>Difficulty<select id="editDifficulty"><option value="simple" ${task.difficulty === "simple" ? "selected" : ""}>Simple</option><option value="normal" ${task.difficulty === "normal" ? "selected" : ""}>Normal</option><option value="hard" ${task.difficulty === "hard" ? "selected" : ""}>Hard</option></select></label></div><div class="task-edit-color-row"><div><span class="detail-label">TASK COLOR</span><div class="detail-help">A quiet accent for this task.</div></div><div class="task-edit-color-picker"><select id="editTagColor" class="task-edit-color-select" tabindex="-1" aria-hidden="true">${tagColorOptions(selectedColor)}</select><button type="button" class="task-edit-color-trigger" aria-label="Choose task color"><span style="background:${selectedColor}"></span></button><div class="task-edit-color-panel">${colorOptions}</div></div></div><label class="task-edit-notes">Notes<textarea id="editNotes" rows="2" placeholder="Add a short note">${escapeHtml(task.notes || "")}</textarea></label><details class="task-edit-advanced"><summary>+ Advanced options</summary><div class="task-edit-grid-two"><label>Start time<input id="editStartTime" type="time" value="${task.startTime || ""}" /></label><label>End time<input id="editEndTime" type="time" value="${task.endTime || ""}" /></label></div></details>${childBlock}</div>`;
 }
 function bindTaskDetailControls(task) {
   $("#addSubtaskButton")?.addEventListener("click", () => addSubtask(task.id));
@@ -894,29 +891,40 @@ function bindTaskDetailControls(task) {
   $$(`[data-remove-child]`).forEach((button) => button.addEventListener("click", () => removeSubtask(task.id, Number(button.dataset.removeChild))));
   $$(`[data-set-progress]`).forEach((button) => button.addEventListener("click", () => setTaskProgress(button.dataset.setProgress, Number(button.dataset.progress), button.dataset.setChild || null)));
   $$(`[data-open-time-log]`).forEach((button) => button.addEventListener("click", () => openManualTimeModal(button.dataset.openTimeLog, button.dataset.timeChild || null)));
-  $$(`[data-toggle-child]`).forEach((button) => button.addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); toggleChildCompletion(button.dataset.toggleChild, button.dataset.childId); }));
-  if (currentDetailMode !== "edit") return;
-  $$(`[data-edit-progress]`).forEach((button) => button.addEventListener("click", () => {
-    const next = clampProgress(button.dataset.editProgress);
-    const input = $("#editProgress");
-    if (input) input.value = String(next);
-    $$(`[data-edit-progress]`).forEach((item) => item.classList.toggle("active", item === button));
-    const preview = $("#detailProgressPreview");
-    if (preview) preview.innerHTML = `${energyMarkup(next)}<div class="progress-number">${next}%${next === 100 ? " ^-^" : ""}</div>`;
+  $$(`[data-toggle-child]`).forEach((button) => {
+    button.dataset.toggleBound = "true";
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      try {
+        toggleChildCompletion(button.dataset.toggleChild, button.dataset.childId);
+      } catch (error) {
+        toast(`Stage update failed: ${error.message || "try again"}.`);
+      }
+    });
+  });
+  $$(`[data-edit-color]`).forEach((button) => button.addEventListener("click", () => {
+    const select = $("#editTagColor");
+    if (!select) return;
+    select.value = button.dataset.editColor;
+    $(".task-edit-color-trigger span")?.style.setProperty("background", select.value);
+    $$(`[data-edit-color]`).forEach((item) => item.classList.toggle("active", item === button));
   }));
+  if (currentDetailMode !== "edit") return;
 }
 function openTaskDetail(taskId, drawer = false, mode = "readonly") {
   const task = state.tasks.find((item) => item.id === taskId); if (!task) return;
   currentDetailTaskId = taskId;
   currentDetailMode = mode;
   const progress = taskProgress(task);
-  $("#detailTitle").textContent = task.title;
+  $("#detailTitle").textContent = mode === "edit" ? "Edit task" : task.title;
   $("#detailContent").innerHTML = mode === "edit" ? renderEditableTaskDetail(task) : renderReadonlyTaskDetail(task);
   $("#editTaskButton").hidden = mode === "edit";
   $("#saveTaskButton").hidden = mode !== "edit";
-  $("#confirmCompleteButton").hidden = task.type === "long-term" || task.status === "done";
+  $("#confirmCompleteButton").hidden = mode === "edit" || task.type === "long-term" || task.status === "done";
   $("#confirmCompleteButton").dataset.completeTask = task.id;
   $("#taskDetailModal").classList.toggle("drawer-mode", drawer);
+  $("#taskDetailModal").classList.toggle("task-edit-mode", mode === "edit");
   if (!$("#taskDetailModal").open) $("#taskDetailModal").showModal();
   bindTaskDetailControls(task);
 }
@@ -929,15 +937,15 @@ async function applyPendingCompletion() {
   if (!pendingCompletion) return;
   const task = state.tasks.find((item) => item.id === pendingCompletion.taskId);
   if (!task) return;
+  let childId = null;
   if (pendingCompletion.childIndex == null) {
     if (task.type === "long-term") { pendingCompletion = null; $("#completionModal").close(); return; }
-    task.status = "done";
-    task.progress = 100;
   } else {
     const child = task.children?.[pendingCompletion.childIndex];
     if (!child) return;
-    updateChildRecord(task.id, child.id, (current) => ({ ...current, progress: 100, status: "done" }));
+    childId = child.id;
   }
+  if (!updateTaskProgress(task.id, 100, childId, { status: "done", clearOverride: true })) return;
   pendingCompletion = null;
   const cloudSave = saveState({ immediate: true });
   $("#completionModal").close();
@@ -962,27 +970,14 @@ async function saveTaskChanges() {
   task.endTime = $("#editEndTime").value;
   task.notes = $("#editNotes").value.trim();
 
-  let pendingChildIndex = null;
   const nextChildren = (task.children || []).map((child, index) => {
     const title = document.querySelector(`[data-child-index="${index}"][data-child-field="title"]`);
     const date = document.querySelector(`[data-child-index="${index}"][data-child-field="date"]`);
-    const startTime = document.querySelector(`[data-child-index="${index}"][data-child-field="startTime"]`);
-    const endTime = document.querySelector(`[data-child-index="${index}"][data-child-field="endTime"]`);
-    const progress = document.querySelector(`[data-child-index="${index}"][data-child-field="progress"]`);
+    const estimateHours = document.querySelector(`[data-child-index="${index}"][data-child-field="estimateHours"]`);
     const nextChild = { ...child };
     if (title) nextChild.title = title.value.trim() || nextChild.title;
     if (date) nextChild.date = date.value || task.scheduledDate;
-    if (startTime) nextChild.startTime = startTime.value;
-    if (endTime) nextChild.endTime = endTime.value;
-    if (progress) {
-      nextChild.progress = clampProgress(progress.value);
-      if (nextChild.progress >= 100) {
-        if (nextChild.status !== "done") {
-          nextChild.status = "pending_confirmation";
-          if (pendingChildIndex == null) pendingChildIndex = index;
-        }
-      } else nextChild.status = childProgressStatus(nextChild.progress);
-    }
+    if (estimateHours) nextChild.estimateHours = Math.max(0.25, Number(estimateHours.value) || 1);
     nextChild.tagColor = task.tagColor;
     return nextChild;
   });
@@ -991,21 +986,12 @@ async function saveTaskChanges() {
 
   if (savedTask.type === "long-term") {
     // Long-term progress is derived at read time; never write a subjective parent value.
-  } else {
-    const enteredProgress = clampProgress($("#editProgress")?.value ?? savedTask.progress ?? 0);
-    let nextProgressOverride = savedTask.progressOverride;
-    if (savedTask.type === "regular" && savedTask.children?.length) {
-      const derived = Math.round(savedTask.children.filter((child) => child.status === "done").length / savedTask.children.length * 100);
-      nextProgressOverride = enteredProgress === derived ? undefined : enteredProgress;
-    }
-    state.tasks = state.tasks.map((item) => item.id === savedTask.id ? { ...item, progress: enteredProgress, status: childProgressStatus(enteredProgress), progressOverride: nextProgressOverride } : item);
   }
 
   const cloudSave = saveState({ immediate: true });
   $("#taskDetailModal").close();
   render();
-  if (pendingChildIndex != null) openCompletionPrompt(task.id, pendingChildIndex);
-  else if (savedTask.status === "pending_confirmation") openCompletionPrompt(savedTask.id);
+  if (savedTask.status === "pending_confirmation") openCompletionPrompt(savedTask.id);
   const result = await cloudSave;
   if (result?.ok) toast("Task changes saved to cloud.");
   else if (result?.reason === "not-connected") toast("Saved on this device only. Connect cloud sync to share it.");
@@ -1024,17 +1010,14 @@ async function setTaskProgress(taskId, progress, childId = null) {
   }
   const wasOpen = $("#taskDetailModal").open;
   if (wasOpen) $("#taskDetailModal").close();
-  if (childId) {
-    updateChildRecord(parent.id, childId, (child) => ({ ...child, progress, status: childProgressStatus(progress) }));
-  } else {
-    state.tasks = state.tasks.map((task) => task.id === parent.id ? { ...task, ...(task.type === "regular" && task.children?.length ? { progressOverride: progress } : {}), progress, status: childProgressStatus(progress) } : task);
-  }
+  const nextProgress = clampProgress(progress);
+  if (!updateTaskProgress(taskId, nextProgress, childId)) return;
   const cloudSave = saveState({ immediate: true });
   render();
-  if (progress >= 100) openCompletionPrompt(parent.id, childId ? parent.children.findIndex((child) => child.id === childId) : null);
+  if (nextProgress >= 100) openCompletionPrompt(parent.id, childId ? parent.children.findIndex((child) => child.id === childId) : null);
   else {
     openTaskDetail(parent.id, wasOpen, "readonly");
-    toast(`${target.title || parent.title} progress updated to ${progress}%.`);
+    toast(`${target.title || parent.title} progress updated to ${nextProgress}%.`);
   }
   const result = await cloudSave;
   if (!result?.ok && result?.reason === "cloud-error") toast(`Progress saved locally; cloud sync failed: ${result.message || "check your connection"}.`);
@@ -1051,26 +1034,63 @@ function updateChildRecord(parentId, childId, updater) {
   let updated = null;
   state.tasks = state.tasks.map((parent) => {
     if (parent.id !== parentId) return parent;
+    let nextChild = null;
     const nextChildren = (parent.children || []).map((child) => {
       if (child.id !== childId) return child;
-      const nextChild = updater({ ...child });
-      updated = { parent: { ...parent, children: nextChildren }, target: nextChild };
+      nextChild = updater({ ...child });
       return nextChild;
     });
-    return updated ? { ...parent, children: nextChildren } : parent;
+    if (!nextChild) return parent;
+    const nextParent = { ...parent, children: nextChildren };
+    updated = { parent: nextParent, target: nextChild };
+    return nextParent;
+  });
+  return updated;
+}
+function updateParentActualDuration(parentId, actualDuration) {
+  let updated = null;
+  state.tasks = state.tasks.map((parent) => {
+    if (parent.id !== parentId) return parent;
+    const nextParent = { ...parent, actualDuration };
+    updated = { parent: nextParent, target: nextParent };
+    return nextParent;
+  });
+  return updated;
+}
+function updateChildActualDuration(parentId, childId, actualDuration) {
+  let updated = null;
+  state.tasks = state.tasks.map((parent) => {
+    if (parent.id !== parentId) return parent;
+    let nextChild = null;
+    const nextChildren = (parent.children || []).map((child) => {
+      if (child.id !== childId) return child;
+      nextChild = { ...child, actualDuration };
+      return nextChild;
+    });
+    if (!nextChild) return parent;
+    const nextActualDuration = nextChildren.reduce((sum, child) => sum + trackedMinutes(child), 0);
+    const nextParent = { ...parent, children: nextChildren, actualDuration: nextActualDuration };
+    updated = { parent: nextParent, target: nextChild };
+    return nextParent;
   });
   return updated;
 }
 function toggleChildCompletion(parentId, childId) {
   const record = findTaskTarget(parentId, childId);
-  if (!record) return;
+  if (!record) { toast("Stage update failed: task binding not found."); return; }
   const nextDone = record.target.status !== "done";
-  updateChildRecord(parentId, childId, (child) => ({ ...child, progress: nextDone ? 100 : 0, status: nextDone ? "done" : "not_started" }));
-  const cloudSave = saveState({ immediate: true });
-  const drawer = $("#taskDetailModal").classList.contains("drawer-mode");
-  render();
-  openTaskDetail(parentId, drawer, "readonly");
-  cloudSave.catch(() => {});
+  const updated = updateChildRecord(parentId, childId, (child) => ({ ...child, progress: nextDone ? 100 : 0, status: nextDone ? "done" : "not_started" }));
+  if (!updated) { toast("Stage update failed: child binding not found."); return; }
+  try {
+    const cloudSave = saveState({ immediate: true });
+    const drawer = $("#taskDetailModal").classList.contains("drawer-mode");
+    render();
+    openTaskDetail(parentId, drawer, "readonly");
+    toast(`Progress updated to ${deriveLongTermProgress(updated.parent)}%.`);
+    cloudSave.catch(() => {});
+  } catch (error) {
+    toast(`Stage update failed: ${error.message || "try again"}.`);
+  }
 }
 let manualTimeTarget = null;
 function openManualTimeModal(taskId, childId = null) {
@@ -1087,13 +1107,16 @@ function saveManualTime() {
   const record = findTaskTarget(manualTimeTarget.taskId, manualTimeTarget.childId);
   if (!record) return;
   const actualDuration = Math.max(0, Math.round(Number($("#manualActualDuration").value) || 0));
-  if (manualTimeTarget.childId) updateChildRecord(record.parent.id, manualTimeTarget.childId, (child) => ({ ...child, actualDuration }));
-  else state.tasks = state.tasks.map((task) => task.id === record.parent.id ? { ...task, actualDuration } : task);
+  const updated = manualTimeTarget.childId
+    ? updateChildActualDuration(record.parent.id, manualTimeTarget.childId, actualDuration)
+    : updateParentActualDuration(record.parent.id, actualDuration);
+  if (!updated) return;
   const cloudSave = saveState({ immediate: true });
   const drawer = $("#taskDetailModal").classList.contains("drawer-mode");
   render();
   if ($("#taskDetailModal").open) openTaskDetail(record.parent.id, drawer, "readonly");
-  cloudSave.catch(() => {});
+  toast(`Actual time saved: ${formatTrackedMinutes(actualDuration)}.`);
+  cloudSave.then((result) => { if (result?.reason === "cloud-error") toast("Saved locally; cloud sync failed."); }).catch(() => toast("Saved locally; cloud sync failed."));
 }
 function childProgressStatus(progress) { return progress >= 100 ? "pending_confirmation" : progress > 0 ? "in_progress" : "not_started"; }
 function completeTask(taskId, childId = null) {
@@ -1101,8 +1124,7 @@ function completeTask(taskId, childId = null) {
   if (!record || record.target.status === "done") return;
   const { parent, target } = record;
   if (target === parent && parent.type === "long-term") return;
-  if (childId) updateChildRecord(parent.id, childId, (child) => ({ ...child, progress: 100, status: "done" }));
-  else state.tasks = state.tasks.map((task) => task.id === parent.id ? { ...task, progress: 100, status: "done", progressOverride: undefined } : task);
+  if (!updateTaskProgress(parent.id, 100, childId, { status: "done", clearOverride: true })) return;
   if ($("#taskDetailModal").open) $("#taskDetailModal").close();
   saveState({ immediate: true });
   render();
@@ -1138,17 +1160,23 @@ function renderTaskQuickAction() {
   $("#quickProgressPlus")?.addEventListener("click", () => updateQuickActionProgress(progress + 10));
   $("#quickCompleteButton")?.addEventListener("click", () => openTaskQuickConfirm("complete"));
 }
-function updateTaskProgress(taskId, nextProgress, childId = null) {
+function updateTaskProgress(taskId, nextProgress, childId = null, options = {}) {
   const record = findTaskTarget(taskId, childId);
   if (!record) return false;
   const progress = clampProgress(nextProgress);
   const { parent } = record;
+  const nextStatus = options.status || childProgressStatus(progress);
   if (childId) {
-    updateChildRecord(parent.id, childId, (child) => ({ ...child, progress, status: childProgressStatus(progress) }));
-    return true;
+    const updated = updateChildRecord(parent.id, childId, (child) => ({ ...child, progress, status: nextStatus }));
+    return Boolean(updated);
   }
   if (parent.type === "long-term") return false;
-  state.tasks = state.tasks.map((task) => task.id === parent.id ? { ...task, ...(task.type === "regular" && task.children?.length ? { progressOverride: progress } : {}), progress, status: childProgressStatus(progress) } : task);
+  state.tasks = state.tasks.map((task) => task.id === parent.id ? {
+    ...task,
+    ...(task.type === "regular" && task.children?.length ? { progressOverride: options.clearOverride ? undefined : progress } : {}),
+    progress,
+    status: nextStatus,
+  } : task);
   return true;
 }
 function updateQuickActionProgress(nextProgress) {
@@ -1188,11 +1216,14 @@ function finalizeTaskQuickAction(action) {
   if (!record) return;
   const { parent } = record;
   if (!taskQuickAction.childId && parent.type === "long-term") return;
-  if (action === "complete") {
-    if (taskQuickAction.childId) updateChildRecord(parent.id, taskQuickAction.childId, (child) => ({ ...child, progress: 100, status: "done" }));
-    else state.tasks = state.tasks.map((task) => task.id === parent.id ? { ...task, progress: 100, status: "done", progressOverride: undefined } : task);
-  } else if (taskQuickAction.childId) updateChildRecord(parent.id, taskQuickAction.childId, (child) => ({ ...child, progress: 0, status: "not_started" }));
-  else state.tasks = state.tasks.map((task) => task.id === parent.id ? { ...task, progress: 0, status: "not_started", progressOverride: undefined } : task);
+  const isComplete = action === "complete";
+  const updated = updateTaskProgress(
+    taskQuickAction.taskId,
+    isComplete ? 100 : 0,
+    taskQuickAction.childId,
+    { status: isComplete ? "done" : "not_started", clearOverride: true },
+  );
+  if (!updated) return;
   const title = record.target.title || parent.title;
   const childId = taskQuickAction.childId;
   const cloudSave = saveState({ immediate: true });
@@ -1200,7 +1231,7 @@ function finalizeTaskQuickAction(action) {
   if ($("#taskQuickActionModal").open) $("#taskQuickActionModal").close();
   taskQuickAction = null;
   render();
-  if (action === "complete") showCompletionToast(title, parent.id, childId);
+  if (isComplete) showCompletionToast(title, parent.id, childId);
   else toast("Task reset to 0%.");
   cloudSave.catch(() => {});
 }
@@ -1209,7 +1240,7 @@ function recordFocusTime(taskId, minutes, childId = null) {
   if (!record) return;
   const addedMinutes = Math.max(0, Math.round(Number(minutes) || 0));
   const actualDuration = trackedMinutes(record.target) + addedMinutes;
-  if (childId) updateChildRecord(record.parent.id, childId, (child) => ({ ...child, actualDuration }));
+  if (childId) updateChildActualDuration(record.parent.id, childId, actualDuration);
   else state.tasks = state.tasks.map((task) => task.id === record.parent.id ? { ...task, actualDuration } : task);
   saveState({ immediate: true });
   render();
@@ -1351,9 +1382,8 @@ $("#confirmImportButton").addEventListener("click", (event) => { event.preventDe
 $("#saveTaskButton").addEventListener("click", saveTaskChanges);
 $("#editTaskButton").addEventListener("click", () => { if (currentDetailTaskId) openTaskDetail(currentDetailTaskId, $("#taskDetailModal").classList.contains("drawer-mode"), "edit"); });
 $("#confirmCompleteButton").addEventListener("click", () => { const button = $("#confirmCompleteButton"); completeTask(button.dataset.completeTask); });
-$("#taskDetailModal").addEventListener("close", () => { $("#taskDetailModal").classList.remove("drawer-mode"); currentDetailMode = "readonly"; });
-$("#manualActualDuration").addEventListener("change", saveManualTime);
-$("#manualTimeModal").addEventListener("close", () => { manualTimeTarget = null; });
+$("#taskDetailModal").addEventListener("close", () => { $("#taskDetailModal").classList.remove("drawer-mode", "task-edit-mode"); currentDetailMode = "readonly"; });
+$("#manualTimeModal").addEventListener("close", () => { saveManualTime(); manualTimeTarget = null; });
 $("#confirmCompletionButton").addEventListener("click", (event) => { event.preventDefault(); applyPendingCompletion(); });
 $("#completionModal").addEventListener("close", () => { if ($("#completionModal").returnValue === "cancel") pendingCompletion = null; });
 $("#taskQuickConfirmCancel").addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); closeTaskQuickConfirm(); });

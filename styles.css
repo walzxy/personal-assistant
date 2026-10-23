@@ -674,3 +674,55 @@ button.calendar-cell { border: 0; color: inherit; text-align: left; font: inheri
 .task-quick-modal { z-index: 90; }
 .quick-confirm-modal { z-index: 100; width: min(340px, calc(100vw - 30px)); }
 .quick-confirm-modal .completion-message { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+
+/* Task edit v4: a quiet, compact paper-like editor. */
+#taskDetailModal.task-edit-mode .modal-header { margin-bottom: 10px; }
+#taskDetailModal.task-edit-mode #detailTitle { color: var(--muted); font: 500 11px Inter, sans-serif; letter-spacing: .12em; text-transform: uppercase; }
+#taskDetailModal.task-edit-mode .task-edit-layout { display: grid; gap: 20px; }
+#taskDetailModal.task-edit-mode .task-edit-title-field { display: grid; gap: 5px; }
+#taskDetailModal.task-edit-mode .task-edit-title { width: 100%; padding: 2px 0 8px; border: 0; border-bottom: 1px solid #d8dfe0; border-radius: 0; background: transparent; color: var(--ink); font: 600 clamp(25px, 4vw, 34px)/1.1 "Space Grotesk", Inter, sans-serif; box-shadow: none; }
+#taskDetailModal.task-edit-mode .task-edit-title:focus { border-bottom-color: var(--cold-deep); box-shadow: 0 2px 0 rgba(96,117,140,.18); }
+#taskDetailModal.task-edit-mode .task-edit-grid-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+#taskDetailModal.task-edit-mode label { margin: 0; color: var(--muted); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
+#taskDetailModal.task-edit-mode input:not([type="checkbox"]), #taskDetailModal.task-edit-mode textarea, #taskDetailModal.task-edit-mode select { width: 100%; border: 0; border-bottom: 1px solid #d8dfe0; border-radius: 0; padding: 8px 0; background: transparent; color: var(--ink); outline: 0; box-shadow: none; }
+#taskDetailModal.task-edit-mode input:not([type="checkbox"]):focus, #taskDetailModal.task-edit-mode textarea:focus, #taskDetailModal.task-edit-mode select:focus { border-bottom-color: var(--cold-deep); box-shadow: 0 2px 0 rgba(96,117,140,.18); }
+#taskDetailModal.task-edit-mode textarea { min-height: 54px; resize: vertical; line-height: 1.6; }
+.task-edit-color-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 2px 0 3px; }
+.task-edit-color-picker { position: relative; flex: 0 0 auto; }
+.task-edit-color-select { position: absolute; width: 1px !important; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.task-edit-color-trigger { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid #d9e0df; border-radius: 50%; background: #fff; cursor: pointer; }
+.task-edit-color-trigger span, .task-edit-color-option span { display: block; width: 16px; height: 16px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(43,57,63,.1); }
+.task-edit-color-trigger:focus-visible { outline: 2px solid rgba(96,117,140,.35); outline-offset: 3px; }
+.task-edit-color-panel { position: absolute; right: 0; top: calc(100% + 8px); z-index: 5; display: flex; gap: 7px; padding: 9px; border: 1px solid #e3e8e6; border-radius: 12px; background: #fff; box-shadow: var(--shadow-hover); opacity: 0; pointer-events: none; transform: translateY(-4px); transition: opacity .2s ease, transform .2s ease; }
+.task-edit-color-picker:focus-within .task-edit-color-panel, .task-edit-color-picker:hover .task-edit-color-panel { opacity: 1; pointer-events: auto; transform: translateY(0); }
+.task-edit-color-option { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
+.task-edit-color-option.active { box-shadow: 0 0 0 2px #fff, 0 0 0 3px var(--cold-deep); }
+.task-edit-advanced { border-top: 1px solid #edf0ee; border-bottom: 1px solid #edf0ee; padding: 12px 0; }
+.task-edit-advanced summary { color: var(--cold-deep); font-size: 11px; font-weight: 600; cursor: pointer; list-style: none; }
+.task-edit-advanced summary::-webkit-details-marker { display: none; }
+.task-edit-advanced[open] summary { margin-bottom: 16px; }
+.task-edit-section { display: grid; gap: 12px; }
+.task-edit-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.task-edit-section-title { margin-top: 4px; color: var(--ink); font: 500 15px "Space Grotesk", Inter, sans-serif; }
+.task-edit-subtasks { display: grid; gap: 5px; }
+.task-edit-subtask-row { display: grid; grid-template-columns: minmax(0, 1fr) 122px 76px 28px; gap: 10px; align-items: center; padding: 8px 9px; border: 1px solid transparent; border-radius: 10px; background: #fafbf9; transition: background .2s ease, border-color .2s ease; }
+.task-edit-subtask-row:hover, .task-edit-subtask-row:focus-within { border-color: #e5ebe9; background: #f5f8f6; }
+.task-edit-subtask-row input { min-width: 0; padding: 5px 0 !important; font-size: 11px; }
+.task-edit-duration-field { display: flex !important; align-items: center; gap: 4px; min-width: 0; }
+.task-edit-duration-field input { min-width: 0; }
+.task-edit-duration-field span { color: var(--muted); font-size: 10px; text-transform: none; }
+.subtask-delete { display: grid; place-items: center; width: 27px; height: 27px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 16px; opacity: 0; cursor: pointer; transition: opacity .2s ease, color .2s ease, background .2s ease; }
+.task-edit-subtask-row:hover .subtask-delete, .task-edit-subtask-row:focus-within .subtask-delete, .subtask-delete:focus-visible { opacity: 1; }
+.subtask-delete:hover, .subtask-delete:focus-visible { color: var(--red); background: #f8e9e6; outline: 0; }
+#taskDetailModal.task-edit-mode .modal-actions { align-items: center; gap: 12px; margin-top: 24px; padding: 14px 0 0; border-top: 1px solid #e8edeb; background: rgba(255,255,255,.97); }
+#taskDetailModal.task-edit-mode #saveTaskButton { flex: 0 0 auto; min-width: 140px; border-color: var(--cold-deep); background: var(--cold-deep); color: #fff; }
+#taskDetailModal.task-edit-mode .modal-actions button[value="cancel"] { flex: 0 0 auto; border: 0; background: transparent; color: var(--muted); }
+#taskDetailModal.task-edit-mode .modal-actions button[value="cancel"]:hover { color: var(--ink); background: transparent; box-shadow: none; }
+#taskDetailModal.task-edit-mode #confirmCompleteButton { display: none; }
+@media (max-width: 600px) {
+  #taskDetailModal.task-edit-mode .task-edit-grid-two { gap: 11px; }
+  .task-edit-subtask-row { grid-template-columns: minmax(0, 1fr) 92px 58px 27px; gap: 7px; padding: 7px 6px; }
+  .task-edit-subtask-row input { font-size: 10px; }
+  .task-edit-section-heading { align-items: flex-start; }
+  .task-edit-section-heading .detail-inline-button { padding: 7px 8px; white-space: nowrap; }
+}
