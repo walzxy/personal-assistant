@@ -38,6 +38,7 @@ let currentView = "assignment";
 let showIncompleteOnly = false;
 let pendingImport = null;
 let currentDetailTaskId = null;
+let currentDetailMode = "readonly";
 let pendingCompletion = null;
 let activePomodoro = null;
 let pendingTimerSync = null;
@@ -66,10 +67,51 @@ function markPendingCloudState(updatedAt) {
   localStorage.setItem(PENDING_SYNC_KEY, JSON.stringify({ state: JSON.parse(JSON.stringify(state)), updatedAt }));
 }
 
-function normalizeState(saved) {
+function clampProgress(value) { return Math.max(0, Math.min(100, Number(value) || 0)); }
+function normalizeTaskChild(child, parent, index) {
+  const actualSeconds = Math.max(0, Number(child.actualSeconds ?? (Number(child.actualMinutes || 0) * 60)) || 0);
+  const progress = clampProgress(child.progress);
+  return {
+    ...child,
+    id: child.id || uid("subtask"),
+    title: String(child.title || `Subtask ${index + 1}`).trim(),
+    date: dateKey(child.date || parent.scheduledDate || todayIso()),
+    startTime: child.startTime || "",
+    endTime: child.endTime || "",
+    estimateHours: Math.max(.25, Number(child.estimateHours || 1) || 1),
+    actualSeconds,
+    actualMinutes: Math.floor(actualSeconds / 60),
+    progress,
+    status: child.status || (progress >= 100 ? "pending_confirmation" : progress > 0 ? "in_progress" : "not_started"),
+    sortOrder: Number.isFinite(Number(child.sortOrder)) ? Number(child.sortOrder) : index,
+  };
+}
+function normalizeTask(task, index) {
+  const actualSeconds = Math.max(0, Number(task.actualSeconds ?? (Number(task.actualMinutes || 0) * 60)) || 0);
+  const normalized = {
+    ...task,
+    id: task.id || uid("task"),
+    title: String(task.title || "Untitled task").trim(),
+    scheduledDate: dateKey(task.scheduledDate || todayIso()),
+    deadline: task.deadline ? dateKey(task.deadline) : "",
+    estimateHours: Math.max(.25, Number(task.estimateHours || 1) || 1),
+    progress: clampProgress(task.progress),
+    status: task.status || "not_started",
+    actualSeconds,
+    actualMinutes: Math.floor(actualSeconds / 60),
+    startTime: task.startTime || "",
+    endTime: task.endTime || "",
+    children: [],
+    sortOrder: Number.isFinite(Number(task.sortOrder)) ? Number(task.sortOrder) : index,
+  };
+  normalized.children = Array.isArray(task.children) ? task.children.map((child, childIndex) => normalizeTaskChild(child, normalized, childIndex)) : [];
+  return normalized;
+}
+
+function normalizeState(saved = {}) {
   return {
     ...saved,
-    tasks: (saved.tasks || []).filter((task) => task.title),
+    tasks: (saved.tasks || []).filter((task) => task && task.title).map(normalizeTask),
     courses: saved.courses || [],
     events: saved.events || [],
     habits: (saved.habits || defaultHabits).map((habit) => ({ ...habit, frequency: habit.frequency || habit.cadence || "weekly", cadence: habit.frequency || habit.cadence || "weekly", checkins: habit.checkins || [] })),
@@ -334,7 +376,31 @@ function tasksForDate(date) {
     if (task.type === "long-term") return (task.children || []).filter((child) => dateKey(child.date) === targetDate).map((child) => ({ ...child, parentId: task.id, parentTitle: task.title, type: "subtask", estimateHours: child.estimateHours || 1, difficulty: child.difficulty || task.difficulty, tagColor: child.tagColor || task.tagColor, scheduledDate: dateKey(child.date), actualSeconds: task.actualSeconds, actualMinutes: task.actualMinutes }));
     if (task.children?.length) return task.children.filter((child) => dateKey(child.date) === targetDate).map((child) => ({ ...child, parentId: task.id, parentTitle: task.title, type: "subtask", estimateHours: child.estimateHours || task.estimateHours / task.children.length, difficulty: child.difficulty || task.difficulty, tagColor: child.tagColor || task.tagColor, scheduledDate: dateKey(child.date), actualSeconds: task.actualSeconds, actualMinutes: task.actualMinutes }));
     return dateKey(task.scheduledDate) === targetDate ? [{ ...task, scheduledDate: dateKey(task.scheduledDate) }] : [];
-  });
+  }).sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0) || String(a.startTime || "").localeCompare(String(b.startTime || "")) || String(a.title).localeCompare(String(b.title)));
+}
+function taskSortKey(task) { return task.parentId ? `${task.parentId}::${task.id}` : task.id; }
+function updateTaskSortOrder(item, sortOrder) {
+  if (item.parentId) {
+    const parent = state.tasks.find((task) => task.id === item.parentId);
+    const child = parent?.children?.find((entry) => entry.id === item.id);
+    if (child) child.sortOrder = sortOrder;
+  } else {
+    const task = state.tasks.find((entry) => entry.id === item.id);
+    if (task) task.sortOrder = sortOrder;
+  }
+}
+function reorderTodayTasks(sourceKey, targetKey) {
+  if (!sourceKey || !targetKey || sourceKey === targetKey) return;
+  const ordered = tasksForDate(selectedDate);
+  const sourceIndex = ordered.findIndex((item) => taskSortKey(item) === sourceKey);
+  const targetIndex = ordered.findIndex((item) => taskSortKey(item) === targetKey);
+  if (sourceIndex < 0 || targetIndex < 0) return;
+  const [moved] = ordered.splice(sourceIndex, 1);
+  ordered.splice(ordered.findIndex((item) => taskSortKey(item) === targetKey), 0, moved);
+  ordered.forEach(updateTaskSortOrder);
+  saveState();
+  render();
+  toast("Today’s order updated.");
 }
 
 function taskProgress(task) { return task.type === "subtask" ? task.status === "done" ? 100 : Math.max(0, Math.min(100, Number(task.progress || 0))) : progressForTask(task); }
@@ -400,6 +466,54 @@ function renderTimeline() {
   $("#timeline").querySelectorAll("[data-open-task]").forEach((button) => button.addEventListener("click", () => openTaskDetail(button.dataset.openTask)));
   $("#timeline").querySelectorAll("[data-open-event]").forEach((button) => button.addEventListener("click", () => openEventDetail(button.dataset.openEvent)));
 }
+function bindTodayTaskSorting() {
+  const cards = [...$("#taskList").querySelectorAll("[data-today-sort-key]")];
+  if (cards.length < 2) return;
+  const clearSortTargets = () => cards.forEach((card) => card.classList.remove("sort-target"));
+  const finishPointerSort = (card, pointerState, event) => {
+    window.clearTimeout(pointerState.holdTimer);
+    window.removeEventListener("pointermove", pointerState.onMove);
+    window.removeEventListener("pointerup", pointerState.onUp);
+    window.removeEventListener("pointercancel", pointerState.onCancel);
+    clearSortTargets();
+    if (pointerState.dragging) {
+      event.preventDefault();
+      card.dataset.dragSuppressed = "true";
+      const target = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-today-sort-key]");
+      if (target && target !== card) reorderTodayTasks(pointerState.sourceKey, target.dataset.todaySortKey);
+      window.setTimeout(() => delete card.dataset.dragSuppressed, 0);
+    }
+    card.classList.remove("dragging");
+  };
+  cards.forEach((card) => {
+    card.addEventListener("dragstart", (event) => {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", card.dataset.todaySortKey);
+      card.classList.add("dragging");
+    });
+    card.addEventListener("dragover", (event) => { event.preventDefault(); clearSortTargets(); card.classList.add("sort-target"); });
+    card.addEventListener("drop", (event) => { event.preventDefault(); const sourceKey = event.dataTransfer.getData("text/plain"); reorderTodayTasks(sourceKey, card.dataset.todaySortKey); });
+    card.addEventListener("dragend", () => { clearSortTargets(); card.classList.remove("dragging"); });
+    card.addEventListener("pointerdown", (event) => {
+      if (event.pointerType === "mouse" || event.target.closest("button")) return;
+      const pointerState = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, dragging: false, sourceKey: card.dataset.todaySortKey, holdTimer: 0, onMove: null, onUp: null, onCancel: null };
+      pointerState.onMove = (moveEvent) => {
+        if (moveEvent.pointerId !== pointerState.pointerId) return;
+        const distance = Math.hypot(moveEvent.clientX - pointerState.startX, moveEvent.clientY - pointerState.startY);
+        if (!pointerState.dragging) { if (distance > 8) window.clearTimeout(pointerState.holdTimer); return; }
+        moveEvent.preventDefault();
+        clearSortTargets();
+        document.elementFromPoint(moveEvent.clientX, moveEvent.clientY)?.closest("[data-today-sort-key]")?.classList.add("sort-target");
+      };
+      pointerState.onUp = (upEvent) => { if (upEvent.pointerId === pointerState.pointerId) finishPointerSort(card, pointerState, upEvent); };
+      pointerState.onCancel = (cancelEvent) => { if (cancelEvent.pointerId === pointerState.pointerId) finishPointerSort(card, pointerState, cancelEvent); };
+      pointerState.holdTimer = window.setTimeout(() => { pointerState.dragging = true; card.classList.add("dragging"); card.setPointerCapture?.(event.pointerId); }, 320);
+      window.addEventListener("pointermove", pointerState.onMove, { passive: false });
+      window.addEventListener("pointerup", pointerState.onUp, { passive: false });
+      window.addEventListener("pointercancel", pointerState.onCancel, { passive: false });
+    }, { passive: true });
+  });
+}
 
 function renderTasks() {
   const tasks = tasksForDate(selectedDate).filter((task) => !showIncompleteOnly || task.status !== "done");
@@ -409,18 +523,26 @@ function renderTasks() {
     const progress = taskProgress(task);
     const status = task.status === "pending_confirmation" || progress >= 100 && task.status !== "done" ? "pending" : task.status === "done" ? "done" : "";
     const detailId = task.parentId || task.id;
+    const sortKey = taskSortKey(task);
     const childText = task.type === "subtask" ? `<span class="subtask-marker" title="Sub-task">⌘</span> ${escapeHtml(task.parentTitle)}` : task.children?.length ? `${task.children.length} subtasks` : `${task.estimateHours || 0}h estimated`;
-    return `<article class="task-card ${task.difficulty === "hard" ? "hard" : ""} ${task.status === "done" ? "completed" : ""}" style="--task-color:${taskColor(task)};--task-tint:${hexToRgba(taskColor(task))}"><div class="task-card-top"><div><div class="task-card-title"><span class="task-color-dot"></span>${escapeHtml(task.title)}</div><div class="task-card-meta">${childText}</div></div><div class="task-card-actions"><span class="status-pill ${status}">${status === "pending" ? "Confirm" : status === "done" ? "Done" : task.status === "in_progress" ? "In progress" : "Not started"}</span><button class="icon-button detail-arrow" data-open-task="${detailId}" aria-label="打开任务">›</button></div></div><div class="progress-row">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div><div class="task-footer"><span data-timer-minutes="${detailId}">${trackedMinutes(task)} min focused</span><button class="timer-button" data-open-timer="${detailId}" aria-label="Open Pomodoro timer">${playIcon()}</button></div>${task.children?.length && task.type !== "long-term" ? `<div class="subtask-note">${task.children.map((child) => `${child.status === "done" ? "✓" : "○"} ${escapeHtml(child.title)}`).join("　")}</div>` : ""}</article>`;
+    const completeButton = task.status === "done" ? "" : `<button class="complete-button" data-complete-task="${detailId}" data-complete-child="${task.parentId ? task.id : ""}" type="button">Complete</button>`;
+    const timeButton = `<button class="task-time-button" data-edit-time="${detailId}" type="button">${escapeHtml(detailTimeLabel(task.startTime, task.endTime))}</button>`;
+    return `<article class="task-card ${task.difficulty === "hard" ? "hard" : ""} ${task.status === "done" ? "completed" : ""}" draggable="true" data-open-task="${detailId}" data-today-sort-key="${escapeHtml(sortKey)}" style="--task-color:${taskColor(task)};--task-tint:${hexToRgba(taskColor(task))}"><div class="task-card-top"><div><div class="task-card-title"><span class="task-color-dot"></span>${escapeHtml(task.title)}</div><div class="task-card-meta">${childText}</div></div><div class="task-card-actions"><span class="status-pill ${status}">${status === "pending" ? "Confirm" : status === "done" ? "Done" : task.status === "in_progress" ? "In progress" : "Not started"}</span><button class="icon-button detail-arrow" data-open-task="${detailId}" aria-label="打开任务">›</button></div></div><div class="progress-row">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div><div class="task-footer"><div class="task-footer-meta"><span data-timer-minutes="${detailId}">${trackedMinutes(task)} min focused</span>${timeButton}</div><div class="task-footer-actions">${completeButton}<button class="timer-button" data-open-timer="${detailId}" aria-label="Open Pomodoro timer">${playIcon()}</button></div></div>${task.children?.length && task.type !== "long-term" ? `<div class="subtask-note">${task.children.map((child) => `${child.status === "done" ? "✓" : "○"} ${escapeHtml(child.title)}`).join("　")}</div>` : ""}</article>`;
   }).join("");
+  $("#taskList").querySelectorAll(".task-card").forEach((card) => card.addEventListener("click", (event) => { if (!event.target.closest("button") && !card.dataset.dragSuppressed) openTaskDetail(card.dataset.openTask); }));
   $("#taskList").querySelectorAll("[data-open-task]").forEach((button) => button.addEventListener("click", () => openTaskDetail(button.dataset.openTask)));
+  $("#taskList").querySelectorAll("[data-complete-task]").forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); completeTask(button.dataset.completeTask, button.dataset.completeChild || null); }));
+  $("#taskList").querySelectorAll("[data-edit-time]").forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); openTaskDetail(button.dataset.editTime, false, "edit"); }));
   $("#taskList").querySelectorAll("[data-open-timer]").forEach((button) => button.addEventListener("click", () => openPomodoro(button.dataset.openTimer)));
+  bindTodayTaskSorting();
 }
 
 function renderLongTerm() {
   const tasks = state.tasks.filter((task) => task.type === "long-term");
   if (!tasks.length) { $("#longTermList").innerHTML = `<div class="empty-state">Long-term projects will appear here when you create one.</div>`; return; }
-  $("#longTermList").innerHTML = tasks.map((task) => { const progress = progressForTask(task); return `<article class="long-term-card" data-open-task="${task.id}" style="--task-color:${taskColor(task)};--task-tint:${hexToRgba(taskColor(task))}"><div class="task-card-top"><div><div class="task-card-title"><span class="task-color-dot"></span>${escapeHtml(task.title)}</div><div class="task-card-meta">${(task.children || []).filter((child) => child.status === "done").length} / ${(task.children || []).length} subtasks</div></div><span class="status-pill ${task.status === "done" ? "done" : ""}">${progress}%</span></div><div class="progress-row">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div></article>`; }).join("");
-  $("#longTermList").querySelectorAll("[data-open-task]").forEach((card) => card.addEventListener("click", () => openTaskDetail(card.dataset.openTask)));
+  $("#longTermList").innerHTML = tasks.map((task) => { const progress = progressForTask(task); const completeButton = task.status === "done" ? "" : `<button class="complete-button" data-complete-task="${task.id}" type="button">Complete</button>`; return `<article class="long-term-card" data-open-task="${task.id}" style="--task-color:${taskColor(task)};--task-tint:${hexToRgba(taskColor(task))}"><div class="task-card-top"><div><div class="task-card-title"><span class="task-color-dot"></span>${escapeHtml(task.title)}</div><div class="task-card-meta">${(task.children || []).filter((child) => child.status === "done").length} / ${(task.children || []).length} subtasks</div></div><span class="status-pill ${task.status === "done" ? "done" : ""}">${progress}%</span></div><div class="progress-row">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div><div class="task-footer"><span>${trackedMinutes(task)} min focused</span>${completeButton}</div></article>`; }).join("");
+  $("#longTermList").querySelectorAll("[data-open-task]").forEach((card) => card.addEventListener("click", (event) => { if (!event.target.closest("button")) openTaskDetail(card.dataset.openTask); }));
+  $("#longTermList").querySelectorAll("[data-complete-task]").forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); completeTask(button.dataset.completeTask); }));
 }
 
 function renderInsights() {
@@ -483,13 +605,13 @@ function renderBoardView() {
   const today = todayIso(); const tomorrow = addDays(today, 1); const week = weekDatesFor(today); const groups = { today: [], tomorrow: [], week: [] };
   boardItems().forEach((item) => { const bucket = boardBucket(item.scheduledDate, today, tomorrow, week); if (bucket) groups[bucket].push(item); });
   const columns = [["today", "Today", formatEnglishDate(today)], ["tomorrow", "Tomorrow", formatEnglishDate(tomorrow)], ["week", "This week", `${formatEnglishDate(week[0])} — ${formatEnglishDate(week[6])}`]];
-  return `<div class="board-heading section-heading"><div><h2>Task board</h2></div><div class="board-hint">${boardItems().length} actionable items</div></div><div class="kanban-board">${columns.map(([key, title, subtitle]) => `<section class="kanban-column" data-board-column="${key}" data-drop-date="${key === "today" ? today : key === "tomorrow" ? tomorrow : addDays(today, 2)}"><div class="kanban-column-header"><div><h3>${title}</h3><span>${subtitle}</span></div><b>${groups[key].length}</b></div><div class="board-drop-zone">${groups[key].length ? groups[key].map((item) => { const progress = taskProgress(item); const owner = item.parentId || item.id; return `<article class="kanban-card ${item.difficulty === "hard" ? "hard" : ""}" draggable="true" data-board-id="${item.id}" data-board-parent="${item.parentId || ""}" data-open-task="${owner}" style="--task-color:${taskColor(item)};--task-tint:${hexToRgba(taskColor(item))}"><div class="kanban-card-title"><span class="task-color-dot"></span><span>${escapeHtml(item.title)}</span></div><div class="kanban-card-meta"><span>${Number(item.estimateHours || 0).toLocaleString("en-US")}h${item.parentId ? ` · ${escapeHtml(item.parentTitle)}` : ""}</span><span>${item.scheduledDate === today ? "Today" : formatEnglishDate(item.scheduledDate)}</span></div><div class="kanban-card-footer">${batteryProgressBar(progress, difficultyWeight(item), "vertical")}<button class="timer-button" data-open-timer="${owner}" aria-label="Open Pomodoro timer">${playIcon()}</button></div></article>`; }).join("") : `<div class="board-empty">Drop a task here</div>`}</div></section>`).join("")}</div>`;
+  return `<div class="board-heading section-heading"><div><h2>Task board</h2></div><div class="board-hint">${boardItems().length} actionable items</div></div><div class="kanban-board">${columns.map(([key, title, subtitle]) => `<section class="kanban-column" data-board-column="${key}" data-drop-date="${key === "today" ? today : key === "tomorrow" ? tomorrow : addDays(today, 2)}"><div class="kanban-column-header"><div><h3>${title}</h3><span>${subtitle}</span></div><b>${groups[key].length}</b></div><div class="board-drop-zone">${groups[key].length ? groups[key].map((item) => { const progress = taskProgress(item); const owner = item.parentId || item.id; const completeButton = item.status === "done" ? "" : `<button class="complete-button" data-complete-task="${owner}" data-complete-child="${item.parentId ? item.id : ""}" type="button">Complete</button>`; return `<article class="kanban-card ${item.difficulty === "hard" ? "hard" : ""}" draggable="true" data-board-id="${item.id}" data-board-parent="${item.parentId || ""}" data-open-task="${owner}" style="--task-color:${taskColor(item)};--task-tint:${hexToRgba(taskColor(item))}"><div class="kanban-card-title"><span class="task-color-dot"></span><span>${escapeHtml(item.title)}</span></div><div class="kanban-card-meta"><span>${Number(item.estimateHours || 0).toLocaleString("en-US")}h${item.parentId ? ` · ${escapeHtml(item.parentTitle)}` : ""}</span><span>${item.scheduledDate === today ? "Today" : formatEnglishDate(item.scheduledDate)}</span></div><div class="kanban-card-footer">${batteryProgressBar(progress, difficultyWeight(item), "vertical")}<div class="kanban-card-actions">${completeButton}<button class="timer-button" data-open-timer="${owner}" aria-label="Open Pomodoro timer">${playIcon()}</button></div></div></article>`; }).join("") : `<div class="board-empty">Drop a task here</div>`}</div></section>`).join("")}</div>`;
 }
 function bindBoardView() {
   $$(`[data-board-id]`).forEach((card) => {
     card.addEventListener("dragstart", (event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", JSON.stringify({ id: card.dataset.boardId, parentId: card.dataset.boardParent })); card.classList.add("dragging"); });
     card.addEventListener("dragend", () => card.classList.remove("dragging"));
-    card.addEventListener("click", (event) => { if (!event.target.closest("[data-open-timer]")) openTaskDetail(card.dataset.openTask, true); });
+    card.addEventListener("click", (event) => { if (!event.target.closest("button")) openTaskDetail(card.dataset.openTask, true); });
   });
   $$(`[data-board-column]`).forEach((column) => {
     column.addEventListener("dragover", (event) => { event.preventDefault(); column.classList.add("drag-over"); });
@@ -497,6 +619,7 @@ function bindBoardView() {
     column.addEventListener("drop", (event) => { event.preventDefault(); column.classList.remove("drag-over"); try { const payload = JSON.parse(event.dataTransfer.getData("text/plain")); const source = boardItems().find((item) => item.id === payload.id && (item.parentId || "") === (payload.parentId || "")); if (!source) return; const targetDate = column.dataset.dropDate; if (updateScheduledDate(source, targetDate)) { saveState(); selectedDate = targetDate; render(); toast(`Scheduled for ${formatShortDate(targetDate)}.`); } } catch (error) { console.warn("Board drop ignored", error); } });
   });
   $$(`[data-open-timer]`).forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); openPomodoro(button.dataset.openTimer); }));
+  $("#boardView")?.querySelectorAll("[data-complete-task]").forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); completeTask(button.dataset.completeTask, button.dataset.completeChild || null); }));
 }
 
 const CALENDAR_START = 8 * 60;
@@ -567,78 +690,117 @@ function renderCalendarDay(date) {
   }).join("");
   return `<div class="week-day-column"><div class="week-day-header"><strong>${DAY_NAMES[parseDate(targetDate).getDay()]}</strong><span>${formatShortDate(targetDate)} · ${dailyProgress(targetDate) == null ? "N/A" : `${dailyProgress(targetDate)}%`}</span></div><div class="week-grid" data-week-date="${targetDate}">${backgrounds}${foreground}</div></div>`;
 }
+function weeklyEntriesForDate(date) {
+  const targetDate = dateKey(date);
+  const taskEntries = tasksForDate(targetDate).map((task) => ({
+    id: `task:${task.parentId || task.id}:${task.id}`,
+    ownerId: task.parentId || task.id,
+    title: task.title,
+    start: timeToMinutes(task.startTime),
+    end: timeToMinutes(task.endTime),
+    startLabel: task.startTime,
+    endLabel: task.endTime,
+    color: taskColor(task),
+    kind: "task",
+    task,
+  }));
+  const scheduledEntries = [...courseOccurrencesForDate(targetDate), ...eventOccurrencesForDate(targetDate)].map((entry) => ({
+    id: `${entry.kind}:${entry.id}`,
+    ownerId: entry.id,
+    title: entry.name || entry.title || "Event",
+    start: timeToMinutes(entry.start),
+    end: timeToMinutes(entry.end),
+    startLabel: entry.start,
+    endLabel: entry.end,
+    color: entry.kind === "event" ? (entry.color || "#CDBBA0") : "#B7C5CF",
+    kind: entry.kind,
+    entry,
+  }));
+  return [...taskEntries, ...scheduledEntries]
+    .filter((entry) => Number.isFinite(entry.start) && Number.isFinite(entry.end) && entry.end > entry.start)
+    .map((entry) => ({ ...entry, start: Math.max(CALENDAR_START, entry.start), end: Math.min(CALENDAR_END, entry.end) }))
+    .filter((entry) => entry.end > entry.start)
+    .sort((a, b) => a.start - b.start || b.end - a.end || a.title.localeCompare(b.title));
+}
+function splitWeeklyTimeline(entries) {
+  const boundaries = [...new Set(entries.flatMap((entry) => [entry.start, entry.end]))].sort((a, b) => a - b);
+  const segments = [];
+  for (let index = 0; index < boundaries.length - 1; index += 1) {
+    const start = boundaries[index];
+    const end = boundaries[index + 1];
+    if (end <= start) continue;
+    const active = entries.filter((entry) => entry.start < end && entry.end > start);
+    if (!active.length) continue;
+    const sliceKey = `${start}-${end}`;
+    const isFullCollision = active.length > 1 && active.every((entry) => entry.start === start && entry.end === end);
+    active.forEach((entry, lane) => segments.push({
+      entry,
+      start,
+      end,
+      lane,
+      laneCount: active.length,
+      sliceKey,
+      isFullCollision,
+    }));
+  }
+  return segments;
+}
+function weekSegmentStyle(segment) {
+  const top = Math.max(0, (segment.start - CALENDAR_START) / 5 * CALENDAR_SLOT_HEIGHT);
+  const height = Math.max(28, (segment.end - segment.start) / 5 * CALENDAR_SLOT_HEIGHT);
+  const width = 100 / segment.laneCount;
+  return `top:${top}px;height:${height}px;left:${segment.lane * width}%;width:${width}%;--segment-color:${segment.entry.color};`;
+}
+function renderWeeklyDay(date) {
+  const targetDate = dateKey(date);
+  const entries = weeklyEntriesForDate(targetDate);
+  const segments = splitWeeklyTimeline(entries);
+  const hourLines = Array.from({ length: 15 }, (_, index) => `<span class="week-hour-line" style="top:${index * 120}px"><b>${String(8 + index).padStart(2, "0")}:00</b></span>`).join("");
+  const blocks = segments.map((segment) => {
+    const { entry } = segment;
+    const label = `${entry.title}, ${entry.startLabel} to ${entry.endLabel}`;
+    return `<button type="button" class="week-segment ${segment.isFullCollision ? "split-collision" : ""} ${entry.kind}-segment" data-week-segment data-week-slice="${segment.sliceKey}" data-week-lane="${segment.lane}" aria-label="${escapeHtml(label)}" style="${weekSegmentStyle(segment)}"><span class="week-segment-color"></span><span class="week-segment-copy"><strong>${escapeHtml(entry.title)}</strong><small>${escapeHtml(entry.startLabel)}—${escapeHtml(entry.endLabel)}</small></span></button>`;
+  }).join("");
+  const empty = entries.length ? "" : `<div class="week-day-empty">No timed blocks</div>`;
+  return `<section class="week-day-timeline" data-week-date="${targetDate}"><header class="week-day-timeline-header"><div><strong>${DAY_NAMES[parseDate(targetDate).getDay()]}</strong><span>${formatShortDate(targetDate)}</span></div><small>${entries.length} ${entries.length === 1 ? "block" : "blocks"} · ${dailyProgress(targetDate) == null ? "No progress" : `${dailyProgress(targetDate)}% complete`}</small></header><div class="week-day-track" style="height:${(CALENDAR_END - CALENDAR_START) / 5 * CALENDAR_SLOT_HEIGHT}px">${hourLines}${blocks}${empty}</div></section>`;
+}
 function renderWeekView() {
-  const days = weekDatesFor(selectedDate); const labels = Array.from({ length: 15 }, (_, index) => `${String(8 + index).padStart(2, "0")}:00`);
-  return `<div class="section-heading"><div><div class="section-kicker">WEEKLY CALENDAR · 5 MIN SNAP</div><h2>${formatDate(days[0], { month: "short", day: "numeric" })} — ${formatDate(days[6], { month: "short", day: "numeric" })}</h2></div><div class="calendar-nav week-nav"><button class="secondary-button" id="weekPrev">‹ Previous</button><button class="secondary-button" id="weekToday">Today</button><button class="secondary-button" id="weekNext">Next ›</button></div></div><div class="week-calendar-card"><div class="week-calendar-scroll"><div class="week-calendar"><div class="week-axis"><div class="week-axis-head"></div><div class="week-axis-labels">${labels.map((label) => `<span>${label}</span>`).join("")}</div></div><div class="week-day-columns">${days.map(renderCalendarDay).join("")}</div></div></div></div>`;
+  const days = weekDatesFor(selectedDate);
+  return `<div class="section-heading"><div><div class="section-kicker">WEEKLY OVERVIEW · COLLISION CHECK</div><h2>${formatDate(days[0], { month: "short", day: "numeric" })} — ${formatDate(days[6], { month: "short", day: "numeric" })}</h2><p class="week-overview-hint">Long bars are cut at every collision boundary. Click a split to inspect the hidden label.</p></div><div class="calendar-nav week-nav"><button class="secondary-button" id="weekPrev">‹ Previous</button><button class="secondary-button" id="weekToday">Today</button><button class="secondary-button" id="weekNext">Next ›</button></div></div><div class="week-timeline-list">${days.map(renderWeeklyDay).join("")}</div>`;
 }
 function bindWeekView() {
   $("#weekPrev")?.addEventListener("click", () => { selectedDate = addDays(selectedDate, -7); render(); }); $("#weekNext")?.addEventListener("click", () => { selectedDate = addDays(selectedDate, 7); render(); }); $("#weekToday")?.addEventListener("click", () => { selectedDate = todayIso(); render(); });
-  const moveCalendarTask = (payload, grid, clientY) => {
-    const source = boardItems().find((item) => item.id === payload.id && (item.parentId || "") === (payload.parentId || ""));
-    if (!source || !grid) return;
-    const sourceStart = timeToMinutes(source.startTime);
-    const sourceEnd = timeToMinutes(source.endTime);
-    if (!Number.isFinite(sourceStart) || !Number.isFinite(sourceEnd) || sourceEnd <= sourceStart) return;
-    const duration = Math.max(5, sourceEnd - sourceStart);
-    const rect = grid.getBoundingClientRect();
-    const scrollTop = grid.parentElement?.scrollTop || 0;
-    const rawMinute = CALENDAR_START + ((clientY - rect.top + scrollTop) / CALENDAR_SLOT_HEIGHT) * 5;
-    const minute = snapToFive(rawMinute);
-    const start = Math.max(CALENDAR_START, Math.min(CALENDAR_END - duration, minute)); const end = start + duration;
-    if (updateScheduledDate(source, grid.dataset.weekDate, minutesToTime(start), minutesToTime(end))) { saveState(); selectedDate = grid.dataset.weekDate; render(); toast(`Moved to ${minutesToTime(start)}.`); }
-  };
-  $$(`[data-calendar-id]`).forEach((block) => {
-    block.addEventListener("dragstart", (event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", JSON.stringify({ id: block.dataset.calendarId, parentId: block.dataset.calendarParent })); });
-    block.addEventListener("dragend", () => block.classList.remove("touch-dragging"));
-    let touchState = null;
-    let holdTimer = null;
-    let suppressClick = false;
-    const clearTouchState = () => {
-      window.clearTimeout(holdTimer);
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", onPointerCancel);
-      block.classList.remove("touch-dragging");
-      touchState = null;
-    };
-    const onPointerMove = (event) => {
-      if (!touchState || event.pointerId !== touchState.pointerId) return;
-      const distance = Math.hypot(event.clientX - touchState.startX, event.clientY - touchState.startY);
-      if (!touchState.dragging) {
-        if (distance > 8) window.clearTimeout(holdTimer);
-        return;
+  $$(`[data-week-segment]`).forEach((segment) => segment.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const slice = segment.dataset.weekSlice;
+    const siblings = $$(`[data-week-segment][data-week-slice="${slice}"]`);
+    if (siblings.length < 2) return;
+    const alreadyExpanded = segment.classList.contains("is-expanded");
+    siblings.forEach((item) => {
+      item.classList.remove("is-expanded");
+      item.style.left = `${Number(item.dataset.weekLane) * (100 / siblings.length)}%`;
+      item.style.width = `${100 / siblings.length}%`;
+    });
+    if (alreadyExpanded) return;
+    const selectedLane = Number(segment.dataset.weekLane);
+    segment.classList.add("is-expanded");
+    siblings.forEach((item) => {
+      if (item === segment) {
+        item.style.left = `${selectedLane === 0 ? 0 : 22}%`;
+        item.style.width = "78%";
+      } else {
+        item.style.left = `${selectedLane === 0 ? 78 : 0}%`;
+        item.style.width = "22%";
       }
-      event.preventDefault();
-    };
-    const onPointerUp = (event) => {
-      if (!touchState || event.pointerId !== touchState.pointerId) return;
-      if (touchState.dragging) {
-        event.preventDefault();
-        suppressClick = true;
-        const grid = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-week-date]") || block.closest("[data-week-date]");
-        moveCalendarTask(touchState.payload, grid, event.clientY);
-        window.setTimeout(() => { suppressClick = false; }, 0);
-      }
-      clearTouchState();
-    };
-    const onPointerCancel = (event) => { if (!touchState || event.pointerId !== touchState.pointerId) return; clearTouchState(); };
-    block.addEventListener("click", () => { if (!suppressClick) openTaskDetail(block.dataset.openTask, true); });
-    block.addEventListener("pointerdown", (event) => {
-      if (event.pointerType === "mouse") return;
-      touchState = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, dragging: false, payload: { id: block.dataset.calendarId, parentId: block.dataset.calendarParent } };
-      holdTimer = window.setTimeout(() => {
-        if (!touchState) return;
-        touchState.dragging = true;
-        block.classList.add("touch-dragging");
-        block.setPointerCapture?.(event.pointerId);
-      }, 450);
-      window.addEventListener("pointermove", onPointerMove, { passive: false });
-      window.addEventListener("pointerup", onPointerUp, { passive: false });
-      window.addEventListener("pointercancel", onPointerCancel, { passive: false });
-    }, { passive: true });
+    });
+  }));
+  $("#weekView")?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-week-segment]")) return;
+    $$(`[data-week-segment].is-expanded`).forEach((segment) => {
+      const siblings = $$(`[data-week-segment][data-week-slice="${segment.dataset.weekSlice}"]`);
+      siblings.forEach((item) => { item.classList.remove("is-expanded"); item.style.left = `${Number(item.dataset.weekLane) * (100 / siblings.length)}%`; item.style.width = `${100 / siblings.length}%`; });
+    });
   });
-  $$(`[data-week-date]`).forEach((grid) => grid.addEventListener("dragover", (event) => event.preventDefault()));
-  $$(`[data-week-date]`).forEach((grid) => grid.addEventListener("drop", (event) => { event.preventDefault(); try { moveCalendarTask(JSON.parse(event.dataTransfer.getData("text/plain")), grid, event.clientY); } catch (error) { console.warn("Calendar drop ignored", error); } }));
 }
 function bindEventButtons() { $$('[data-open-event]').forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); openEventDetail(button.dataset.openEvent); })); }
 
@@ -678,37 +840,97 @@ function placeholderText(view) { return { "message-board": { title: "A message b
 function courseOccurrencesForDate(date) { const targetDate = dateKey(date); return state.courses.filter((course) => dateKey(course.date) === targetDate).map((course) => ({ ...course, date: targetDate, kind: "course" })); }
 function overlaps(startA, endA, startB, endB) { if (!startA || !endA || !startB || !endB) return false; return startA < endB && startB < endA; }
 
-function openTaskDetail(taskId, drawer = false) {
-  const task = state.tasks.find((item) => item.id === taskId); if (!task) return;
-  currentDetailTaskId = taskId;
+function detailTimeLabel(start, end) {
+  if (start && end) return `${start} — ${end}`;
+  if (start) return `${start} — no end time`;
+  if (end) return `No start time — ${end}`;
+  return "Time not set";
+}
+function formatTrackedMinutes(minutes) {
+  const value = Math.max(0, Math.round(Number(minutes) || 0));
+  if (!value) return "0m";
+  const hours = Math.floor(value / 60);
+  const remainder = value % 60;
+  return hours ? `${hours}h ${remainder ? `${remainder}m` : ""}`.trim() : `${remainder}m`;
+}
+function renderReadonlyTaskDetail(task) {
+  const progress = taskProgress(task);
+  const stages = task.children?.length ? task.children.map((child) => ({
+    title: child.title,
+    status: child.status,
+    progress: child.progress,
+    startTime: child.startTime,
+    endTime: child.endTime,
+    date: child.date,
+    actualMinutes: child.actualMinutes,
+  })) : [{
+    title: task.title,
+    status: task.status,
+    progress,
+    startTime: task.startTime,
+    endTime: task.endTime,
+    date: task.scheduledDate,
+    actualMinutes: trackedMinutes(task),
+  }];
+  const estimatedMinutes = Math.round((Number(task.estimateHours) || 0) * 60);
+  const actualMinutes = trackedMinutes(task);
+  const status = taskStatusLabel(task);
+  return `<div class="detail-readonly">
+    <div class="detail-hero" style="--task-color:${taskColor(task)};--task-tint:${hexToRgba(taskColor(task), .12)}">
+      <div><div class="detail-label">${TYPE_LABEL[task.type] || "Task"}</div><p class="detail-summary">${escapeHtml(task.notes || "No notes added yet.")}</p></div>
+      <span class="status-pill ${task.status === "done" ? "done" : task.status === "pending_confirmation" ? "pending" : ""}">${status}</span>
+    </div>
+    <div class="detail-grid detail-summary-grid">
+      <div><div class="detail-label">Planned date</div><div class="detail-value">${escapeHtml(formatEnglishDate(task.scheduledDate || selectedDate))}</div></div>
+      <div><div class="detail-label">Deadline</div><div class="detail-value">${task.deadline ? escapeHtml(formatEnglishDate(task.deadline)) : "No deadline"}</div></div>
+      <div><div class="detail-label">Time span</div><div class="detail-value">${escapeHtml(detailTimeLabel(task.startTime, task.endTime))}</div></div>
+      <div><div class="detail-label">Progress</div><div class="detail-value">${progress}%</div></div>
+    </div>
+    <div class="detail-block detail-time-comparison"><div class="detail-block-header"><div><div class="detail-label">Focus time</div><div class="detail-value">Actual vs estimated</div></div><strong>${formatTrackedMinutes(actualMinutes)} / ${formatTrackedMinutes(estimatedMinutes)}</strong></div><div class="time-comparison-track"><span style="width:${estimatedMinutes ? Math.min(100, actualMinutes / estimatedMinutes * 100) : 0}%"></span></div><div class="detail-help">${actualMinutes > estimatedMinutes && estimatedMinutes ? "Actual focus time is above the estimate." : "Recorded focus time compared with the original estimate."}</div></div>
+    <div class="detail-block"><div class="detail-block-header"><div><div class="detail-label">Stages</div><div class="detail-value">Subtask timeline</div></div><span class="muted-label">${stages.length} ${stages.length === 1 ? "stage" : "stages"}</span></div><div class="task-stage-timeline">${stages.map((stage) => `<div class="task-stage ${stage.status === "done" ? "done" : ""}"><span class="task-stage-marker">${stage.status === "done" ? "✓" : ""}</span><div class="task-stage-content"><strong>${escapeHtml(stage.title)}</strong><span>${escapeHtml(stage.date ? formatEnglishDate(stage.date) : "Date not set")} · ${escapeHtml(detailTimeLabel(stage.startTime, stage.endTime))}</span><small>${stage.status === "done" ? "Completed" : `${clampProgress(stage.progress)}% complete`} · ${formatTrackedMinutes(stage.actualMinutes)} focused</small></div></div>`).join("")}</div></div>
+    <div class="detail-progress-readonly"><div class="detail-block-header"><div><div class="detail-label">Progress</div><div class="detail-value">${progress}% complete</div></div>${energyMarkup(progress)}</div></div>
+    <div class="detail-actions"><span class="detail-label detail-action-label">Update progress</span><button type="button" data-set-progress="${task.id}" data-progress="25">25%</button><button type="button" data-set-progress="${task.id}" data-progress="50">50%</button><button type="button" data-set-progress="${task.id}" data-progress="75">75%</button><button type="button" data-open-timer="${task.id}" class="timer-button detail-timer-button" aria-label="Open Pomodoro timer">${playIcon()}<span>Focus</span></button></div>
+  </div>`;
+}
+function renderEditableTaskDetail(task) {
   const progress = progressForTask(task);
-  $("#detailTitle").textContent = task.title;
-  const childBlock = ["regular", "long-term"].includes(task.type) ? `<div class="detail-block"><div class="detail-block-header"><div><div class="detail-label">Subtasks</div><div class="detail-help">${task.type === "regular" ? "Up to 3 same-level subtasks, each with a date." : "Each subtask contributes to the long-term count."}</div></div><button type="button" class="detail-inline-button" id="addSubtaskButton" ${task.type === "regular" && (task.children || []).length >= 3 ? "disabled" : ""}>+ Add subtask</button></div><div class="subtask-editor">${(task.children || []).map((child, index) => `<div class="subtask-row"><input data-child-index="${index}" data-child-field="title" value="${escapeHtml(child.title)}" aria-label="子任务名称" placeholder="Subtask title" /><input data-child-index="${index}" data-child-field="date" type="date" value="${child.date || task.scheduledDate || selectedDate}" aria-label="子任务日期" /><input data-child-index="${index}" data-child-field="progress" type="number" min="0" max="100" step="5" inputmode="numeric" value="${child.progress || 0}" aria-label="子任务进度" /><div class="subtask-row-actions">${child.progress >= 100 && child.status !== "done" ? `<button type="button" class="detail-inline-button" data-confirm-child="${index}">Confirm</button>` : ""}<button type="button" class="icon-button" data-remove-child="${index}" aria-label="删除子任务">×</button></div></div>`).join("") || `<div class="detail-help">No subtasks yet.</div>`}</div></div>` : "";
+  const childBlock = ["regular", "long-term"].includes(task.type) ? `<div class="detail-block"><div class="detail-block-header"><div><div class="detail-label">Subtasks</div><div class="detail-help">${task.type === "regular" ? "Up to 3 same-level subtasks, each with a date." : "Each subtask contributes to the long-term count."}</div></div><button type="button" class="detail-inline-button" id="addSubtaskButton" ${task.type === "regular" && (task.children || []).length >= 3 ? "disabled" : ""}>+ Add subtask</button></div><div class="subtask-editor">${(task.children || []).map((child, index) => `<div class="subtask-row"><input data-child-index="${index}" data-child-field="title" value="${escapeHtml(child.title)}" aria-label="子任务名称" placeholder="Subtask title" /><input data-child-index="${index}" data-child-field="date" type="date" value="${child.date || task.scheduledDate || selectedDate}" aria-label="子任务日期" /><input data-child-index="${index}" data-child-field="startTime" type="time" value="${child.startTime || ""}" aria-label="子任务开始时间" /><input data-child-index="${index}" data-child-field="endTime" type="time" value="${child.endTime || ""}" aria-label="子任务结束时间" /><input data-child-index="${index}" data-child-field="progress" type="number" min="0" max="100" step="5" inputmode="numeric" value="${child.progress || 0}" aria-label="子任务进度" /><div class="subtask-row-actions">${child.progress >= 100 && child.status !== "done" ? `<button type="button" class="detail-inline-button" data-confirm-child="${index}">Confirm</button>` : ""}<button type="button" class="icon-button" data-remove-child="${index}" aria-label="删除子任务">×</button></div></div>`).join("") || `<div class="detail-help">No subtasks yet.</div>`}</div></div>` : "";
   const isDerivedProgress = task.type === "long-term";
   const progressEditor = isDerivedProgress
     ? `<div class="progress-editor"><div class="detail-label">Progress</div><div class="readonly-field progress-readonly" id="editProgressReadonly">${progress}%</div><div class="detail-help">Long-term progress is calculated from completed subtasks.</div></div>`
-    : `<label class="progress-editor"><span>${task.type === "regular" && task.children?.length ? "Parent progress override" : "Progress"}</span><div class="progress-input-row"><input id="editProgressRange" type="range" min="0" max="100" step="5" value="${progress}" aria-label="Progress slider" /><input id="editProgress" type="number" min="0" max="100" step="5" inputmode="numeric" value="${progress}" aria-label="Progress percentage" /><span>%</span></div>${task.type === "regular" && task.children?.length ? `<div class="detail-help">Set the parent percentage directly, or match the completed-child percentage to return to automatic calculation.</div>` : ""}</label>`;
-  $("#detailContent").innerHTML = `<div class="detail-block"><div class="form-grid"><label>Title<input id="editTitle" value="${escapeHtml(task.title)}" maxlength="120" /></label><label>Type<div class="readonly-field">${TYPE_LABEL[task.type]}</div></label><label>Planned date<input id="editScheduledDate" type="date" value="${task.scheduledDate || selectedDate}" /></label><label>Deadline<input id="editDeadline" type="date" value="${task.deadline || ""}" /></label><label>Estimated hours<input id="editEstimateHours" type="number" min="0.25" step="0.25" value="${task.estimateHours || 1}" /></label><label>Difficulty<select id="editDifficulty"><option value="simple" ${task.difficulty === "simple" ? "selected" : ""}>Simple</option><option value="normal" ${task.difficulty === "normal" ? "selected" : ""}>Normal</option><option value="hard" ${task.difficulty === "hard" ? "selected" : ""}>Hard</option></select></label><label>Task color<select id="editTagColor">${tagColorOptions(taskColor(task))}</select></label><label>Start time<input id="editStartTime" type="time" value="${task.startTime || ""}" /></label><label>End time<input id="editEndTime" type="time" value="${task.endTime || ""}" /></label></div><label>Notes<textarea id="editNotes" rows="3">${escapeHtml(task.notes || "")}</textarea></label>${progressEditor}<div class="detail-progress" id="detailProgressPreview">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div></div>${childBlock}<div class="detail-actions"><button type="button" data-set-progress="${task.id}" data-progress="0">0%</button><button type="button" data-set-progress="${task.id}" data-progress="50">50%</button><button type="button" data-set-progress="${task.id}" data-progress="100">100%</button><button type="button" data-open-timer="${task.id}" class="timer-button detail-timer-button" aria-label="Open Pomodoro timer">${playIcon()}<span>Focus</span></button></div>`;
-  $("#confirmCompleteButton").style.display = progress >= 100 && task.status !== "done" ? "inline-block" : "none";
-  $("#confirmCompleteButton").dataset.completeTask = task.id;
-  $("#taskDetailModal").classList.toggle("drawer-mode", drawer);
-  $("#taskDetailModal").showModal();
+    : `<div class="progress-editor"><div class="detail-label">${task.type === "regular" && task.children?.length ? "Parent progress override" : "Progress"}</div><div class="progress-quick-actions" role="group" aria-label="Quick progress"><button type="button" class="${progress === 0 ? "active" : ""}" data-edit-progress="0">0%</button><button type="button" class="${progress === 25 ? "active" : ""}" data-edit-progress="25">25%</button><button type="button" class="${progress === 50 ? "active" : ""}" data-edit-progress="50">50%</button><button type="button" class="${progress === 75 ? "active" : ""}" data-edit-progress="75">75%</button></div><input id="editProgress" type="hidden" value="${progress}" /><div class="detail-progress" id="detailProgressPreview">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div>${task.type === "regular" && task.children?.length ? `<div class="detail-help">Choose a preset percentage for the parent. Child completion remains the source of truth when no override is needed.</div>` : ""}</div>`;
+  return `<div class="detail-block"><div class="form-grid"><label>Title<input id="editTitle" value="${escapeHtml(task.title)}" maxlength="120" /></label><label>Type<div class="readonly-field">${TYPE_LABEL[task.type]}</div></label><label>Planned date<input id="editScheduledDate" type="date" value="${task.scheduledDate || selectedDate}" /></label><label>Deadline<input id="editDeadline" type="date" value="${task.deadline || ""}" /></label><label>Estimated hours<input id="editEstimateHours" type="number" min="0.25" step="0.25" value="${task.estimateHours || 1}" /></label><label>Difficulty<select id="editDifficulty"><option value="simple" ${task.difficulty === "simple" ? "selected" : ""}>Simple</option><option value="normal" ${task.difficulty === "normal" ? "selected" : ""}>Normal</option><option value="hard" ${task.difficulty === "hard" ? "selected" : ""}>Hard</option></select></label><label>Task color<select id="editTagColor">${tagColorOptions(taskColor(task))}</select></label><label>Start time<input id="editStartTime" type="time" value="${task.startTime || ""}" /></label><label>End time<input id="editEndTime" type="time" value="${task.endTime || ""}" /></label></div><label>Notes<textarea id="editNotes" rows="3">${escapeHtml(task.notes || "")}</textarea></label>${progressEditor}</div>${childBlock}<div class="detail-actions"><button type="button" data-open-timer="${task.id}" class="timer-button detail-timer-button" aria-label="Open Pomodoro timer">${playIcon()}<span>Focus</span></button></div>`;
+}
+function bindTaskDetailControls(task) {
   $("#addSubtaskButton")?.addEventListener("click", () => addSubtask(task.id));
   $$(`[data-confirm-child]`).forEach((button) => button.addEventListener("click", () => confirmChild(task.id, Number(button.dataset.confirmChild))));
   $$(`[data-remove-child]`).forEach((button) => button.addEventListener("click", () => removeSubtask(task.id, Number(button.dataset.removeChild))));
   $$(`[data-set-progress]`).forEach((button) => button.addEventListener("click", () => setTaskProgress(button.dataset.setProgress, Number(button.dataset.progress))));
   $$(`[data-open-timer]`).forEach((button) => button.addEventListener("click", () => openPomodoro(button.dataset.openTimer)));
-  const progressRange = $("#editProgressRange");
-  const progressNumber = $("#editProgress");
-  const updateProgressPreview = (value) => {
-    const next = Math.max(0, Math.min(100, Number(value) || 0));
-    if (progressRange) progressRange.value = String(next);
-    if (progressNumber) progressNumber.value = String(next);
+  if (currentDetailMode !== "edit") return;
+  $$(`[data-edit-progress]`).forEach((button) => button.addEventListener("click", () => {
+    const next = clampProgress(button.dataset.editProgress);
+    const input = $("#editProgress");
+    if (input) input.value = String(next);
+    $$(`[data-edit-progress]`).forEach((item) => item.classList.toggle("active", item === button));
     const preview = $("#detailProgressPreview");
     if (preview) preview.innerHTML = `${energyMarkup(next)}<div class="progress-number">${next}%${next === 100 ? " ^-^" : ""}</div>`;
-  };
-  progressRange?.addEventListener("input", (event) => updateProgressPreview(event.target.value));
-  progressNumber?.addEventListener("input", (event) => updateProgressPreview(event.target.value));
+  }));
+}
+function openTaskDetail(taskId, drawer = false, mode = "readonly") {
+  const task = state.tasks.find((item) => item.id === taskId); if (!task) return;
+  currentDetailTaskId = taskId;
+  currentDetailMode = mode;
+  const progress = taskProgress(task);
+  $("#detailTitle").textContent = task.title;
+  $("#detailContent").innerHTML = mode === "edit" ? renderEditableTaskDetail(task) : renderReadonlyTaskDetail(task);
+  $("#editTaskButton").hidden = mode === "edit";
+  $("#saveTaskButton").hidden = mode !== "edit";
+  $("#confirmCompleteButton").hidden = task.status === "done";
+  $("#confirmCompleteButton").dataset.completeTask = task.id;
+  $("#taskDetailModal").classList.toggle("drawer-mode", drawer);
+  if (!$("#taskDetailModal").open) $("#taskDetailModal").showModal();
+  bindTaskDetailControls(task);
 }
 
 function tagColorOptions(selected) { const labels = { "#8EA1B5": "Dusty Blue · work / study", "#9CAF88": "Sage Green · life / health", "#C08A8A": "Dusty Rose · reading / hobby", "#CDBBA0": "Oatmeal · daily", "#A697B5": "Taro Purple · inspiration", "#D9A05B": "Muted Orange · urgent", "#86A3A3": "Teal · long-term", "#D8B4B4": "Pale Pink · personal" }; return TAG_COLORS.map((color) => `<option value="${color}" ${color === selected ? "selected" : ""}>${labels[color]}</option>`).join(""); }
@@ -756,9 +978,13 @@ async function saveTaskChanges() {
   task.children?.forEach((child, index) => {
     const title = document.querySelector(`[data-child-index="${index}"][data-child-field="title"]`);
     const date = document.querySelector(`[data-child-index="${index}"][data-child-field="date"]`);
+    const startTime = document.querySelector(`[data-child-index="${index}"][data-child-field="startTime"]`);
+    const endTime = document.querySelector(`[data-child-index="${index}"][data-child-field="endTime"]`);
     const progress = document.querySelector(`[data-child-index="${index}"][data-child-field="progress"]`);
     if (title) child.title = title.value.trim() || child.title;
     if (date) child.date = date.value || task.scheduledDate;
+    if (startTime) child.startTime = startTime.value;
+    if (endTime) child.endTime = endTime.value;
     if (progress) {
       child.progress = Math.max(0, Math.min(100, Number(progress.value) || 0));
       if (child.progress >= 100) {
@@ -867,10 +1093,96 @@ function syncTimerProgress(shouldSync) {
   if (pending.suggestedProgress >= 100) openCompletionPrompt(task.id);
   cloudSave.then((result) => { if (result?.ok) toast("Task progress updated and synced."); else toast("Task progress updated locally; cloud sync is pending."); });
 }
+function findTaskTarget(taskId, childId = null) {
+  const parent = state.tasks.find((item) => item.id === taskId);
+  if (!parent) return null;
+  if (!childId) return { parent, target: parent };
+  const target = parent.children?.find((child) => child.id === childId);
+  return target ? { parent, target } : null;
+}
+function completeTask(taskId, childId = null) {
+  const record = findTaskTarget(taskId, childId);
+  if (!record || record.target.status === "done") return;
+  const { parent, target } = record;
+  target.progress = 100;
+  target.status = "done";
+  if (target === parent) {
+    parent.progress = 100;
+    parent.status = "done";
+    delete parent.progressOverride;
+  } else if (parent.type === "long-term") {
+    parent.progress = progressForTask(parent);
+    parent.status = "in_progress";
+  }
+  if ($("#taskDetailModal").open) $("#taskDetailModal").close();
+  saveState({ immediate: true });
+  render();
+  showCompletionToast(target.title || parent.title, parent.id, target === parent ? null : target.id);
+}
+function recordFocusTime(taskId, minutes, childId = null) {
+  const record = findTaskTarget(taskId, childId);
+  if (!record) return;
+  const seconds = Math.max(0, Number(minutes) || 0) * 60;
+  record.target.actualSeconds = trackedSeconds(record.target) + seconds;
+  record.target.actualMinutes = Math.floor(record.target.actualSeconds / 60);
+  saveState({ immediate: true });
+  render();
+  toast(`Recorded +${minutes}m focus time.`);
+}
+function showCompletionToast(title, taskId, childId = null) {
+  const element = $("#toast");
+  clearTimeout(toast.timer);
+  element.innerHTML = `<span>${escapeHtml(title)} completed. Add focus time?</span><div class="toast-actions"><button type="button" data-toast-focus="30">+30m</button><button type="button" data-toast-focus="60">+1h</button></div>`;
+  element.classList.add("show", "completion-toast");
+  element.querySelectorAll("[data-toast-focus]").forEach((button) => button.addEventListener("click", () => {
+    hideToast();
+    recordFocusTime(taskId, Number(button.dataset.toastFocus), childId);
+  }));
+  toast.timer = setTimeout(hideToast, 1000);
+}
+function hideToast() {
+  const element = $("#toast");
+  clearTimeout(toast.timer);
+  element.classList.remove("show", "completion-toast");
+  element.textContent = "";
+}
 function checkHabit(habitId) { const habit = state.habits.find((item) => item.id === habitId); if (!habit) return; habit.checkins ||= []; const today = todayIso(); const index = habit.checkins.indexOf(today); if (index >= 0) { habit.checkins.splice(index, 1); saveState(); render(); toast(`${habit.name} check-in undone.`); return; } habit.checkins.push(today); saveState(); render(); toast(`${habit.name} checked in for today.`); }
 
-function openTaskModal() { const form = $("#taskForm"); form.reset(); form.elements.scheduledDate.value = selectedDate; $("#taskModal").showModal(); }
-function createTask(event) { event.preventDefault(); const form = event.currentTarget; if (event.submitter?.value === "cancel") { form.reset(); $("#taskModal").close(); return; } const data = new FormData(form); const type = data.get("type"); const task = { id: uid("task"), type, title: data.get("title").trim(), notes: data.get("notes").trim(), scheduledDate: data.get("scheduledDate"), deadline: data.get("deadline"), estimateHours: Number(data.get("estimateHours")), difficulty: data.get("difficulty"), progress: 0, status: "not_started", actualMinutes: 0, startTime: data.get("startTime"), endTime: data.get("endTime"), children: [], tagColor: data.get("tagColor") || DEFAULT_TAG_COLOR[type], createdAt: new Date().toISOString() }; state.tasks.push(task); saveState(); form.reset(); $("#taskModal").close(); selectedDate = task.scheduledDate; currentTab = "today"; render(); toast("Task created."); }
+function openTaskModal() { const form = $("#taskForm"); form.reset(); $("#taskModal").showModal(); }
+function createTask(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  if (event.submitter?.value === "cancel") { form.reset(); $("#taskModal").close(); return; }
+  const title = new FormData(form).get("title")?.toString().trim();
+  if (!title) return;
+  const task = {
+    id: uid("task"),
+    type: "regular",
+    title,
+    notes: "",
+    scheduledDate: selectedDate,
+    deadline: "",
+    estimateHours: 1,
+    difficulty: "normal",
+    progress: 0,
+    status: "not_started",
+    actualSeconds: 0,
+    actualMinutes: 0,
+    startTime: "",
+    endTime: "",
+    children: [],
+    sortOrder: state.tasks.length,
+    tagColor: DEFAULT_TAG_COLOR.regular,
+    createdAt: new Date().toISOString(),
+  };
+  state.tasks.push(task);
+  saveState();
+  form.reset();
+  $("#taskModal").close();
+  currentTab = "today";
+  render();
+  toast("Task created. Add details whenever you need them.");
+}
 
 function importCourseFile(file) { const reader = new FileReader(); reader.onload = () => { try { const parsed = JSON.parse(reader.result); validateCourseData(parsed); pendingImport = parsed; renderImportPreview(parsed); $("#importModal").showModal(); } catch (error) { toast(`Import failed: ${error.message}`); } }; reader.readAsText(file); }
 function validateCourseData(data) { if (!data || !data.semester?.week1Monday || !Array.isArray(data.courses)) throw new Error("需要 semester.week1Monday 和 courses 字段"); data.courses.forEach((course) => { if (!course.id || !course.name || !Array.isArray(course.sessions)) throw new Error("课程缺少 id、name 或 sessions"); course.sessions.forEach((session) => { if (!(session.day >= 1 && session.day <= 7) || !Array.isArray(session.weeks) || !session.start || !session.end) throw new Error(`课程 ${course.name} 的 session 字段不完整`); }); }); }
@@ -889,7 +1201,7 @@ function commitCourseImport() { if (!pendingImport) return; state.courses = expa
 
 function exportData() { const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = `xiaoyu-export-${todayIso()}.json`; link.click(); URL.revokeObjectURL(url); }
 function escapeHtml(value = "") { return String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char])); }
-function toast(message) { const element = $("#toast"); element.textContent = message; element.classList.add("show"); clearTimeout(toast.timer); toast.timer = setTimeout(() => element.classList.remove("show"), 2500); }
+function toast(message) { const element = $("#toast"); clearTimeout(toast.timer); element.classList.remove("completion-toast"); element.textContent = message; element.classList.add("show"); toast.timer = setTimeout(() => element.classList.remove("show"), 2500); }
 
 function openAuthModal() {
   updateCloudControls();
@@ -946,7 +1258,9 @@ $("#deleteEventButton").addEventListener("click", deleteEvent);
 $("#courseFileInput").addEventListener("change", (event) => { if (event.target.files[0]) importCourseFile(event.target.files[0]); event.target.value = ""; });
 $("#confirmImportButton").addEventListener("click", (event) => { event.preventDefault(); commitCourseImport(); });
 $("#saveTaskButton").addEventListener("click", saveTaskChanges);
-$("#taskDetailModal").addEventListener("close", () => { $("#taskDetailModal").classList.remove("drawer-mode"); });
+$("#editTaskButton").addEventListener("click", () => { if (currentDetailTaskId) openTaskDetail(currentDetailTaskId, $("#taskDetailModal").classList.contains("drawer-mode"), "edit"); });
+$("#confirmCompleteButton").addEventListener("click", () => { const button = $("#confirmCompleteButton"); completeTask(button.dataset.completeTask); });
+$("#taskDetailModal").addEventListener("close", () => { $("#taskDetailModal").classList.remove("drawer-mode"); currentDetailMode = "readonly"; });
 $("#pomodoroStartButton").addEventListener("click", startPomodoro);
 $("#pomodoroPauseButton").addEventListener("click", pausePomodoro);
 $("#pomodoroEndButton").addEventListener("click", endPomodoro);

@@ -18,28 +18,19 @@
 
         <nav class="primary-nav" aria-label="主导航">
           <button class="nav-item placeholder-nav" data-view="message-board">
-            <span class="nav-icon">✦</span>
             <span>Xiao Yu message board</span>
-            <span class="nav-badge">soon</span>
           </button>
           <button class="nav-item active" data-view="assignment">
-            <span class="nav-icon">◫</span>
             <span>Assignment and goal</span>
           </button>
           <button class="nav-item placeholder-nav" data-view="reading">
-            <span class="nav-icon">▤</span>
             <span>Reading and writing</span>
-            <span class="nav-badge">soon</span>
           </button>
           <button class="nav-item placeholder-nav" data-view="archive">
-            <span class="nav-icon">◇</span>
             <span>Archive</span>
-            <span class="nav-badge">soon</span>
           </button>
           <button class="nav-item placeholder-nav" data-view="inspiration">
-            <span class="nav-icon">⌁</span>
             <span>The inspiration box</span>
-            <span class="nav-badge">soon</span>
           </button>
         </nav>
 
@@ -176,31 +167,21 @@
         <div class="modal-header">
           <div>
             <div class="section-kicker">NEW TASK</div>
-            <h2>Create a small next step</h2>
+            <h2>What needs doing?</h2>
           </div>
           <button class="icon-button" value="cancel" formnovalidate aria-label="关闭">×</button>
         </div>
         <label>Title<input name="title" required maxlength="120" placeholder="例如：完成数学作业第一题" /></label>
-        <div class="form-grid">
-          <label>Type<select name="type"><option value="regular">Regular Task</option><option value="standalone">Standalone Task</option><option value="long-term">Long-term Task</option></select></label>
-          <label>Date<input name="scheduledDate" type="date" required /></label>
-          <label>Deadline<input name="deadline" type="date" /></label>
-          <label>Estimated hours<input name="estimateHours" type="number" min="0.25" step="0.25" value="1" required /></label>
-          <label>Difficulty<select name="difficulty"><option value="simple">Simple</option><option value="normal" selected>Normal</option><option value="hard">Hard</option></select></label>
-          <label>Task color<select name="tagColor"><option value="#8EA1B5">Dusty Blue · work / study</option><option value="#9CAF88">Sage Green · life / health</option><option value="#C08A8A">Dusty Rose · reading / hobby</option><option value="#CDBBA0">Oatmeal · daily</option><option value="#A697B5">Taro Purple · inspiration</option><option value="#D9A05B">Muted Orange · urgent</option><option value="#86A3A3">Teal · long-term</option><option value="#D8B4B4">Pale Pink · personal</option></select></label>
-          <label>Start time<input name="startTime" type="time" /></label>
-          <label>End time<input name="endTime" type="time" /></label>
-        </div>
-        <label>Notes<textarea name="notes" rows="3" placeholder="可以留下一点背景或下一步"></textarea></label>
+        <p class="detail-help quick-create-help">You can add time, a deadline, notes and subtasks after it exists.</p>
         <div class="modal-actions"><button class="secondary-button" value="cancel" formnovalidate>Cancel</button><button class="primary-button" value="default">Create task</button></div>
       </form>
     </dialog>
 
-    <dialog class="modal" id="taskDetailModal">
+    <dialog class="modal wide-modal" id="taskDetailModal">
       <form method="dialog" id="taskDetailForm">
-        <div class="modal-header"><div><div class="section-kicker">TASK DETAIL</div><h2 id="detailTitle">Task</h2></div><button class="icon-button" value="cancel" formnovalidate aria-label="关闭">×</button></div>
+        <div class="modal-header"><div><div class="section-kicker">TASK DETAIL</div><h2 id="detailTitle">Task</h2></div><div class="modal-header-actions"><button class="detail-edit-button" id="editTaskButton" type="button">Edit</button><button class="icon-button" value="cancel" formnovalidate aria-label="关闭">×</button></div></div>
         <div id="detailContent"></div>
-        <div class="modal-actions"><button class="secondary-button" id="saveTaskButton" type="button">Save changes</button><button class="secondary-button" value="cancel" formnovalidate>Close</button><button class="primary-button" id="confirmCompleteButton" type="button">Confirm complete</button></div>
+        <div class="modal-actions"><button class="secondary-button" id="saveTaskButton" type="button" hidden>Save changes</button><button class="secondary-button" value="cancel" formnovalidate>Close</button><button class="primary-button" id="confirmCompleteButton" type="button" hidden>Complete</button></div>
       </form>
     </dialog>
 
