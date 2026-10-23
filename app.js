@@ -40,8 +40,6 @@ let pendingImport = null;
 let currentDetailTaskId = null;
 let currentDetailMode = "readonly";
 let pendingCompletion = null;
-let activePomodoro = null;
-let pendingTimerSync = null;
 let supabaseClient = null;
 let cloudSession = null;
 let cloudSyncTimer = null;
@@ -69,27 +67,30 @@ function markPendingCloudState(updatedAt) {
 
 function clampProgress(value) { return Math.max(0, Math.min(100, Number(value) || 0)); }
 function normalizeTaskChild(child, parent, index) {
-  const actualSeconds = Math.max(0, Number(child.actualSeconds ?? (Number(child.actualMinutes || 0) * 60)) || 0);
+  const { actualSeconds: legacySeconds, actualMinutes: legacyMinutes, ...childData } = child;
+  const legacyDuration = legacySeconds != null ? Number(legacySeconds) / 60 : legacyMinutes != null ? Number(legacyMinutes) : 0;
+  const actualDuration = Math.max(0, Math.round(Number(child.actualDuration ?? legacyDuration) || 0));
   const progress = clampProgress(child.progress);
   return {
-    ...child,
+    ...childData,
     id: child.id || uid("subtask"),
     title: String(child.title || `Subtask ${index + 1}`).trim(),
     date: dateKey(child.date || parent.scheduledDate || todayIso()),
     startTime: child.startTime || "",
     endTime: child.endTime || "",
     estimateHours: Math.max(.25, Number(child.estimateHours || 1) || 1),
-    actualSeconds,
-    actualMinutes: Math.floor(actualSeconds / 60),
+    actualDuration,
     progress,
     status: child.status || (progress >= 100 ? "pending_confirmation" : progress > 0 ? "in_progress" : "not_started"),
     sortOrder: Number.isFinite(Number(child.sortOrder)) ? Number(child.sortOrder) : index,
   };
 }
 function normalizeTask(task, index) {
-  const actualSeconds = Math.max(0, Number(task.actualSeconds ?? (Number(task.actualMinutes || 0) * 60)) || 0);
+  const { actualSeconds: legacySeconds, actualMinutes: legacyMinutes, ...taskData } = task;
+  const legacyDuration = legacySeconds != null ? Number(legacySeconds) / 60 : legacyMinutes != null ? Number(legacyMinutes) : 0;
+  const actualDuration = Math.max(0, Math.round(Number(task.actualDuration ?? legacyDuration) || 0));
   const normalized = {
-    ...task,
+    ...taskData,
     id: task.id || uid("task"),
     title: String(task.title || "Untitled task").trim(),
     scheduledDate: dateKey(task.scheduledDate || todayIso()),
@@ -97,8 +98,7 @@ function normalizeTask(task, index) {
     estimateHours: Math.max(.25, Number(task.estimateHours || 1) || 1),
     progress: clampProgress(task.progress),
     status: task.status || "not_started",
-    actualSeconds,
-    actualMinutes: Math.floor(actualSeconds / 60),
+    actualDuration,
     startTime: task.startTime || "",
     endTime: task.endTime || "",
     children: [],
@@ -126,9 +126,9 @@ function loadState() {
   } catch (error) { console.warn("Could not load local data", error); }
   return {
     tasks: [
-      { id: "demo-1", type: "regular", title: "整理本周学习计划", notes: "把课程、作业和可用时间放到同一条时间轴里。", scheduledDate: todayIso(), deadline: todayIso(), estimateHours: 1.5, difficulty: "normal", progress: 60, status: "in_progress", actualMinutes: 42, startTime: "09:00", endTime: "10:30", children: [], tagColor: "#8EA1B5", createdAt: new Date().toISOString() },
-      { id: "demo-2", type: "standalone", title: "回复一封重要邮件", notes: "", scheduledDate: todayIso(), deadline: todayIso(), estimateHours: 0.5, difficulty: "simple", progress: 0, status: "not_started", actualMinutes: 0, startTime: "16:00", endTime: "16:30", children: [], tagColor: "#D9A05B", createdAt: new Date().toISOString() },
-      { id: "demo-long", type: "long-term", title: "建立个人学习系统", notes: "第一版先完成任务、课程和习惯基础。", scheduledDate: todayIso(), deadline: "2026-12-31", estimateHours: 20, difficulty: "hard", progress: 33, status: "in_progress", actualMinutes: 90, children: [
+      { id: "demo-1", type: "regular", title: "整理本周学习计划", notes: "把课程、作业和可用时间放到同一条时间轴里。", scheduledDate: todayIso(), deadline: todayIso(), estimateHours: 1.5, difficulty: "normal", progress: 60, status: "in_progress", actualDuration: 42, startTime: "09:00", endTime: "10:30", children: [], tagColor: "#8EA1B5", createdAt: new Date().toISOString() },
+      { id: "demo-2", type: "standalone", title: "回复一封重要邮件", notes: "", scheduledDate: todayIso(), deadline: todayIso(), estimateHours: 0.5, difficulty: "simple", progress: 0, status: "not_started", actualDuration: 0, startTime: "16:00", endTime: "16:30", children: [], tagColor: "#D9A05B", createdAt: new Date().toISOString() },
+      { id: "demo-long", type: "long-term", title: "建立个人学习系统", notes: "第一版先完成任务、课程和习惯基础。", scheduledDate: todayIso(), deadline: "2026-12-31", estimateHours: 20, difficulty: "hard", progress: 33, status: "in_progress", actualDuration: 90, children: [
         { id: "demo-long-1", title: "整理需求文档", date: todayIso(), progress: 100, status: "done", estimateHours: 2 },
         { id: "demo-long-2", title: "搭建任务页", date: todayIso(), progress: 100, status: "done", estimateHours: 4 },
         { id: "demo-long-3", title: "接入课程导入", date: "2026-10-24", progress: 0, status: "not_started", estimateHours: 3 },
@@ -379,8 +379,8 @@ function dateKey(value) {
 function tasksForDate(date) {
   const targetDate = dateKey(date);
   return state.tasks.flatMap((task) => {
-    if (task.type === "long-term") return (task.children || []).filter((child) => dateKey(child.date) === targetDate).map((child) => ({ ...child, parentId: task.id, parentTitle: task.title, type: "subtask", estimateHours: child.estimateHours || 1, difficulty: child.difficulty || task.difficulty, tagColor: child.tagColor || task.tagColor, scheduledDate: dateKey(child.date), actualSeconds: task.actualSeconds, actualMinutes: task.actualMinutes }));
-    if (task.children?.length) return task.children.filter((child) => dateKey(child.date) === targetDate).map((child) => ({ ...child, parentId: task.id, parentTitle: task.title, type: "subtask", estimateHours: child.estimateHours || task.estimateHours / task.children.length, difficulty: child.difficulty || task.difficulty, tagColor: child.tagColor || task.tagColor, scheduledDate: dateKey(child.date), actualSeconds: task.actualSeconds, actualMinutes: task.actualMinutes }));
+    if (task.type === "long-term") return (task.children || []).filter((child) => dateKey(child.date) === targetDate).map((child) => ({ ...child, parentId: task.id, parentTitle: task.title, type: "subtask", estimateHours: child.estimateHours || 1, difficulty: child.difficulty || task.difficulty, tagColor: child.tagColor || task.tagColor, scheduledDate: dateKey(child.date), actualDuration: child.actualDuration }));
+    if (task.children?.length) return task.children.filter((child) => dateKey(child.date) === targetDate).map((child) => ({ ...child, parentId: task.id, parentTitle: task.title, type: "subtask", estimateHours: child.estimateHours || task.estimateHours / task.children.length, difficulty: child.difficulty || task.difficulty, tagColor: child.tagColor || task.tagColor, scheduledDate: dateKey(child.date), actualDuration: child.actualDuration }));
     return dateKey(task.scheduledDate) === targetDate ? [{ ...task, scheduledDate: dateKey(task.scheduledDate) }] : [];
   }).sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0) || String(a.startTime || "").localeCompare(String(b.startTime || "")) || String(a.title).localeCompare(String(b.title)));
 }
@@ -427,7 +427,6 @@ function batteryProgressBar(progress, weight = 1, orientation = "horizontal", sh
   return `<div class="battery-progress ${orientation}" data-weight="${weight}" aria-label="Progress ${value}%, weight ${weight}"><div class="energy-grid">${Array.from({ length: 10 }, (_, index) => { const isPartial = index === filled && partial > 0 && filled < 10; return `<span class="energy-cell ${index < filled ? `filled ${color}` : isPartial ? `partial ${color}` : ""}" ${isPartial ? `style="--partial-fill:${partial * 10}%"` : ""}></span>`; }).join("")}</div>${showValue ? `<span class="battery-value">${value}%${face}</span>` : ""}</div>`;
 }
 function energyMarkup(progress, extraClass = "") { return batteryProgressBar(progress, 1, extraClass.includes("vertical") ? "vertical" : "horizontal", false); }
-function playIcon() { return '<svg class="timer-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 5.14v13.72a1.5 1.5 0 0 0 2.27 1.29l10.3-6.86a1.55 1.55 0 0 0 0-2.58L10.27 3.85A1.5 1.5 0 0 0 8 5.14Z" fill="currentColor"></path></svg>'; }
 
 function render() {
   renderDateHeader();
@@ -521,6 +520,11 @@ function bindTodayTaskSorting() {
   });
 }
 
+function taskQuickButtonMarkup(task, taskId, childId = null) {
+  const completed = task.status === "done";
+  return `<button class="task-status-button ${completed ? "completed" : ""}" data-quick-task="${escapeHtml(taskId)}" data-quick-child="${escapeHtml(childId || "")}" type="button" aria-label="${completed ? "Open completed task actions" : "Open task progress actions"}">${completed ? "●" : "○"}</button>`;
+}
+
 function renderTasks() {
   const tasks = tasksForDate(selectedDate).filter((task) => !showIncompleteOnly || task.status !== "done");
   $("#showIncomplete").textContent = showIncompleteOnly ? "Showing incomplete" : "Show incomplete";
@@ -531,15 +535,15 @@ function renderTasks() {
     const detailId = task.parentId || task.id;
     const sortKey = taskSortKey(task);
     const childText = task.type === "subtask" ? `<span class="subtask-marker" title="Sub-task">⌘</span> ${escapeHtml(task.parentTitle)}` : task.children?.length ? `${task.children.length} subtasks` : `${task.estimateHours || 0}h estimated`;
-    const completeButton = task.status === "done" ? "" : `<button class="complete-button" data-complete-task="${detailId}" data-complete-child="${task.parentId ? task.id : ""}" type="button">Complete</button>`;
+    const statusButton = taskQuickButtonMarkup(task, detailId, task.parentId ? task.id : null);
     const timeButton = `<button class="task-time-button" data-edit-time="${detailId}" type="button">${escapeHtml(detailTimeLabel(task.startTime, task.endTime))}</button>`;
-    return `<article class="task-card ${task.difficulty === "hard" ? "hard" : ""} ${task.status === "done" ? "completed" : ""}" draggable="true" data-open-task="${detailId}" data-today-sort-key="${escapeHtml(sortKey)}" style="--task-color:${taskColor(task)};--task-tint:${hexToRgba(taskColor(task))}"><div class="task-card-top"><div><div class="task-card-title"><span class="task-color-dot"></span>${escapeHtml(task.title)}</div><div class="task-card-meta">${childText}</div></div><div class="task-card-actions"><span class="status-pill ${status}">${status === "pending" ? "Confirm" : status === "done" ? "Done" : task.status === "in_progress" ? "In progress" : "Not started"}</span><button class="icon-button detail-arrow" data-open-task="${detailId}" aria-label="打开任务">›</button></div></div><div class="progress-row">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div><div class="task-footer"><div class="task-footer-meta"><span data-timer-minutes="${detailId}">${trackedMinutes(task)} min focused</span>${timeButton}</div><div class="task-footer-actions">${completeButton}<button class="timer-button" data-open-timer="${detailId}" aria-label="Open Pomodoro timer">${playIcon()}</button></div></div>${task.children?.length && task.type !== "long-term" ? `<div class="subtask-note">${task.children.map((child) => `${child.status === "done" ? "✓" : "○"} ${escapeHtml(child.title)}`).join("　")}</div>` : ""}</article>`;
+  return `<article class="task-card ${task.difficulty === "hard" ? "hard" : ""} ${task.status === "done" ? "completed" : ""}" draggable="true" data-open-task="${detailId}" data-today-sort-key="${escapeHtml(sortKey)}" style="--task-color:${taskColor(task)};--task-tint:${hexToRgba(taskColor(task))}"><div class="task-card-top"><div><div class="task-card-title"><span class="task-color-dot"></span>${escapeHtml(task.title)}</div><div class="task-card-meta">${childText}</div></div><div class="task-card-actions"><span class="status-pill ${status}">${status === "pending" ? "Confirm" : status === "done" ? "Done" : task.status === "in_progress" ? "In progress" : "Not started"}</span><button class="icon-button detail-arrow" data-open-task="${detailId}" aria-label="打开任务">›</button></div></div><div class="progress-row">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div><div class="task-footer"><div class="task-footer-meta"><span data-timer-minutes="${detailId}">${trackedMinutes(task)} min focused</span>${timeButton}</div><div class="task-footer-actions">${statusButton}</div></div>${task.children?.length && task.type !== "long-term" ? `<div class="subtask-note">${task.children.map((child) => `${child.status === "done" ? "✓" : "○"} ${escapeHtml(child.title)}`).join("　")}</div>` : ""}</article>`;
   }).join("");
   $("#taskList").querySelectorAll(".task-card").forEach((card) => card.addEventListener("click", (event) => { if (!event.target.closest("button") && !card.dataset.dragSuppressed) openTaskDetail(card.dataset.openTask); }));
   $("#taskList").querySelectorAll("[data-open-task]").forEach((button) => button.addEventListener("click", () => openTaskDetail(button.dataset.openTask)));
   $("#taskList").querySelectorAll("[data-complete-task]").forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); completeTask(button.dataset.completeTask, button.dataset.completeChild || null); }));
+  $("#taskList").querySelectorAll("[data-quick-task]").forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); openTaskQuickAction(button.dataset.quickTask, button.dataset.quickChild || null); }));
   $("#taskList").querySelectorAll("[data-edit-time]").forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); openTaskDetail(button.dataset.editTime, false, "edit"); }));
-  $("#taskList").querySelectorAll("[data-open-timer]").forEach((button) => button.addEventListener("click", () => openPomodoro(button.dataset.openTimer)));
   bindTodayTaskSorting();
 }
 
@@ -593,7 +597,7 @@ function addDays(value, amount) { const date = parseDate(value); date.setDate(da
 function weekDatesFor(value = selectedDate) { const base = parseDate(value); const monday = new Date(base); const day = monday.getDay() || 7; monday.setDate(monday.getDate() - day + 1); return Array.from({ length: 7 }, (_, i) => addDays(isoDate(monday), i)); }
 function boardItems() {
   return state.tasks.flatMap((task) => {
-    if (task.children?.length && ["regular", "long-term"].includes(task.type)) return task.children.map((child) => ({ ...child, id: child.id, sourceId: child.id, parentId: task.id, parentTitle: task.title, type: "subtask", scheduledDate: dateKey(child.date), estimateHours: child.estimateHours || Math.max(.25, (task.estimateHours || 1) / task.children.length), difficulty: child.difficulty || task.difficulty, tagColor: child.tagColor || task.tagColor, actualSeconds: task.actualSeconds, actualMinutes: task.actualMinutes }));
+    if (task.children?.length && ["regular", "long-term"].includes(task.type)) return task.children.map((child) => ({ ...child, id: child.id, sourceId: child.id, parentId: task.id, parentTitle: task.title, type: "subtask", scheduledDate: dateKey(child.date), estimateHours: child.estimateHours || Math.max(.25, (task.estimateHours || 1) / task.children.length), difficulty: child.difficulty || task.difficulty, tagColor: child.tagColor || task.tagColor, actualDuration: child.actualDuration }));
     return { ...task, scheduledDate: dateKey(task.scheduledDate) };
   }).filter((task) => task.scheduledDate);
 }
@@ -611,7 +615,7 @@ function renderBoardView() {
   const today = todayIso(); const tomorrow = addDays(today, 1); const week = weekDatesFor(today); const groups = { today: [], tomorrow: [], week: [] };
   boardItems().forEach((item) => { const bucket = boardBucket(item.scheduledDate, today, tomorrow, week); if (bucket) groups[bucket].push(item); });
   const columns = [["today", "Today", formatEnglishDate(today)], ["tomorrow", "Tomorrow", formatEnglishDate(tomorrow)], ["week", "This week", `${formatEnglishDate(week[0])} — ${formatEnglishDate(week[6])}`]];
-  return `<div class="board-heading section-heading"><div><h2>Task board</h2></div><div class="board-hint">${boardItems().length} actionable items</div></div><div class="kanban-board">${columns.map(([key, title, subtitle]) => `<section class="kanban-column" data-board-column="${key}" data-drop-date="${key === "today" ? today : key === "tomorrow" ? tomorrow : addDays(today, 2)}"><div class="kanban-column-header"><div><h3>${title}</h3><span>${subtitle}</span></div><b>${groups[key].length}</b></div><div class="board-drop-zone">${groups[key].length ? groups[key].map((item) => { const progress = taskProgress(item); const owner = item.parentId || item.id; const completeButton = item.status === "done" ? "" : `<button class="complete-button" data-complete-task="${owner}" data-complete-child="${item.parentId ? item.id : ""}" type="button">Complete</button>`; return `<article class="kanban-card ${item.difficulty === "hard" ? "hard" : ""}" draggable="true" data-board-id="${item.id}" data-board-parent="${item.parentId || ""}" data-open-task="${owner}" style="--task-color:${taskColor(item)};--task-tint:${hexToRgba(taskColor(item))}"><div class="kanban-card-title"><span class="task-color-dot"></span><span>${escapeHtml(item.title)}</span></div><div class="kanban-card-meta"><span>${Number(item.estimateHours || 0).toLocaleString("en-US")}h${item.parentId ? ` · ${escapeHtml(item.parentTitle)}` : ""}</span><span>${item.scheduledDate === today ? "Today" : formatEnglishDate(item.scheduledDate)}</span></div><div class="kanban-card-footer">${batteryProgressBar(progress, difficultyWeight(item), "vertical")}<div class="kanban-card-actions">${completeButton}<button class="timer-button" data-open-timer="${owner}" aria-label="Open Pomodoro timer">${playIcon()}</button></div></div></article>`; }).join("") : `<div class="board-empty">Drop a task here</div>`}</div></section>`).join("")}</div>`;
+  return `<div class="board-heading section-heading"><div><h2>Task board</h2></div><div class="board-hint">${boardItems().length} actionable items</div></div><div class="kanban-board">${columns.map(([key, title, subtitle]) => `<section class="kanban-column" data-board-column="${key}" data-drop-date="${key === "today" ? today : key === "tomorrow" ? tomorrow : addDays(today, 2)}"><div class="kanban-column-header"><div><h3>${title}</h3><span>${subtitle}</span></div><b>${groups[key].length}</b></div><div class="board-drop-zone">${groups[key].length ? groups[key].map((item) => { const progress = taskProgress(item); const owner = item.parentId || item.id; const statusButton = taskQuickButtonMarkup(item, owner, item.parentId ? item.id : null); return `<article class="kanban-card ${item.difficulty === "hard" ? "hard" : ""}" draggable="true" data-board-id="${item.id}" data-board-parent="${item.parentId || ""}" data-open-task="${owner}" style="--task-color:${taskColor(item)};--task-tint:${hexToRgba(taskColor(item))}"><div class="kanban-card-title"><span class="task-color-dot"></span><span>${escapeHtml(item.title)}</span></div><div class="kanban-card-meta"><span>${Number(item.estimateHours || 0).toLocaleString("en-US")}h${item.parentId ? ` · ${escapeHtml(item.parentTitle)}` : ""}</span><span>${item.scheduledDate === today ? "Today" : formatEnglishDate(item.scheduledDate)}</span></div><div class="kanban-card-footer">${batteryProgressBar(progress, difficultyWeight(item), "vertical")}<div class="kanban-card-actions">${statusButton}</div></div></article>`; }).join("") : `<div class="board-empty">Drop a task here</div>`}</div></section>`).join("")}</div>`;
 }
 function bindBoardView() {
   $$(`[data-board-id]`).forEach((card) => {
@@ -624,8 +628,8 @@ function bindBoardView() {
     column.addEventListener("dragleave", () => column.classList.remove("drag-over"));
     column.addEventListener("drop", (event) => { event.preventDefault(); column.classList.remove("drag-over"); try { const payload = JSON.parse(event.dataTransfer.getData("text/plain")); const source = boardItems().find((item) => item.id === payload.id && (item.parentId || "") === (payload.parentId || "")); if (!source) return; const targetDate = column.dataset.dropDate; if (updateScheduledDate(source, targetDate)) { saveState(); selectedDate = targetDate; render(); toast(`Scheduled for ${formatShortDate(targetDate)}.`); } } catch (error) { console.warn("Board drop ignored", error); } });
   });
-  $$(`[data-open-timer]`).forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); openPomodoro(button.dataset.openTimer); }));
   $("#boardView")?.querySelectorAll("[data-complete-task]").forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); completeTask(button.dataset.completeTask, button.dataset.completeChild || null); }));
+  $("#boardView")?.querySelectorAll("[data-quick-task]").forEach((button) => button.addEventListener("click", (event) => { event.stopPropagation(); openTaskQuickAction(button.dataset.quickTask, button.dataset.quickChild || null); }));
 }
 
 const WEEK_DAY_START = 6 * 60;
@@ -850,58 +854,30 @@ function formatTrackedMinutes(minutes) {
   const remainder = value % 60;
   return hours ? `${hours}h ${remainder ? `${remainder}m` : ""}`.trim() : `${remainder}m`;
 }
-function renderReadonlyTaskDetail(task) {
-  const progress = taskProgress(task);
-  const stages = task.children?.length ? task.children.map((child) => ({
-    id: child.id,
-    title: child.title,
-    status: child.status,
-    progress: child.progress,
-    startTime: child.startTime,
-    endTime: child.endTime,
-    date: child.date,
-    actualMinutes: child.actualMinutes,
-  })) : [{
-    title: task.title,
-    status: task.status,
-    progress,
-    startTime: task.startTime,
-    endTime: task.endTime,
-    date: task.scheduledDate,
-    actualMinutes: trackedMinutes(task),
-  }];
-  const estimatedMinutes = Math.round((Number(task.estimateHours) || 0) * 60);
-  const actualMinutes = trackedMinutes(task);
-  const status = taskStatusLabel(task);
-  const statusClass = progress >= 100 ? "done" : status === "Confirm completion" ? "pending" : "";
+function detailScheduleMarkup(task, estimatedMinutes) {
   const plannedDate = task.scheduledDate || selectedDate;
   const deadlineDate = task.deadline || plannedDate;
-  const progressWidth = `${Math.min(100, Math.max(0, progress))}%`;
-  const stageProgressControls = (stage) => task.type === "long-term" && stage.id ? `<div class="detail-actions stage-progress-actions"><span class="detail-label detail-action-label">Update subtask</span><button type="button" data-set-progress="${task.id}" data-set-child="${stage.id}" data-progress="25">25%</button><button type="button" data-set-progress="${task.id}" data-set-child="${stage.id}" data-progress="50">50%</button><button type="button" data-set-progress="${task.id}" data-set-child="${stage.id}" data-progress="75">75%</button></div>` : "";
-  return `<div class="detail-readonly">
-    <div class="detail-intro" style="--task-color:${taskColor(task)}">
-      <div class="detail-label">${TYPE_LABEL[task.type] || "Task"}</div>
-      <p class="detail-description">${escapeHtml(task.notes || "No notes added yet.")}</p>
-    </div>
-    <div class="detail-schedule-card">
-      <div class="detail-schedule-node">
-        <span class="detail-schedule-dot"></span>
-        <div><span class="detail-label">START</span><strong>${escapeHtml(formatEnglishDate(plannedDate))}</strong><small>${escapeHtml(detailTimeLabel(task.startTime, task.endTime))}</small></div>
-      </div>
-      <div class="detail-schedule-line"><span>Total ${escapeHtml(formatTrackedMinutes(estimatedMinutes))}</span></div>
-      <div class="detail-schedule-node detail-schedule-node-end">
-        <span class="detail-schedule-dot"></span>
-        <div><span class="detail-label">DEADLINE</span><strong>${task.deadline ? escapeHtml(formatEnglishDate(deadlineDate)) : "No deadline"}</strong><small>${task.deadline ? "Target date" : "Keep moving"}</small></div>
-      </div>
-    </div>
-    <div class="detail-status-row">
-      <div class="detail-status-item"><span class="detail-label">STATUS</span><span class="status-pill ${statusClass}">${status}</span></div>
-      <div class="detail-status-item detail-status-progress"><span class="detail-label">PROGRESS</span><div class="detail-status-track"><span style="width:${progressWidth}"></span></div><strong>${progress}%</strong></div>
-    </div>
-    <div class="detail-block detail-time-comparison"><div class="detail-block-header"><div><div class="detail-label">Focus time</div></div><span class="muted-label">Actual / estimated</span></div><div class="detail-focus-metrics"><div><strong>${formatTrackedMinutes(actualMinutes)}</strong><span>Actual</span></div><div><strong>${formatTrackedMinutes(estimatedMinutes)}</strong><span>Estimated</span></div></div><div class="time-comparison-track"><span style="width:${estimatedMinutes ? Math.min(100, actualMinutes / estimatedMinutes * 100) : 0}%"></span></div></div>
-    <div class="detail-block detail-stages-block"><div class="detail-block-header"><div><div class="detail-label">Stages</div><div class="detail-value">Subtask timeline</div></div><span class="muted-label">${stages.length} ${stages.length === 1 ? "stage" : "stages"}</span></div><div class="task-stage-timeline">${stages.map((stage) => `<div class="task-stage ${stage.status === "done" ? "done" : ""}"><span class="task-stage-marker">${stage.status === "done" ? "✓" : ""}</span><div class="task-stage-content"><strong>${escapeHtml(stage.title)}</strong><span>${escapeHtml(stage.date ? formatEnglishDate(stage.date) : "Date not set")} · ${escapeHtml(detailTimeLabel(stage.startTime, stage.endTime))}</span><small>${stage.status === "done" ? "Completed" : `${clampProgress(stage.progress)}% complete`} · ${formatTrackedMinutes(stage.actualMinutes)} focused</small>${stageProgressControls(stage)}</div></div>`).join("")}</div></div>
-    <div class="detail-actions">${task.type !== "long-term" ? `<span class="detail-label detail-action-label">Update progress</span><button type="button" data-set-progress="${task.id}" data-progress="25">25%</button><button type="button" data-set-progress="${task.id}" data-progress="50">50%</button><button type="button" data-set-progress="${task.id}" data-progress="75">75%</button>` : `<span class="detail-label detail-action-label">Progress is derived from subtasks</span>`}<button type="button" data-open-timer="${task.id}" class="timer-button detail-timer-button" aria-label="Open Pomodoro timer">${playIcon()}<span>Focus</span></button></div>
-  </div>`;
+  return `<div class="detail-schedule-card"><div class="detail-schedule-node"><span class="detail-schedule-dot"></span><div><span class="detail-label">START</span><strong>${escapeHtml(formatEnglishDate(plannedDate))}</strong><small>${escapeHtml(detailTimeLabel(task.startTime, task.endTime))}</small></div></div><div class="detail-schedule-line"><span>Total ${escapeHtml(formatTrackedMinutes(estimatedMinutes))}</span></div><div class="detail-schedule-node detail-schedule-node-end"><span class="detail-schedule-dot"></span><div><span class="detail-label">DEADLINE</span><strong>${task.deadline ? escapeHtml(formatEnglishDate(deadlineDate)) : "No deadline"}</strong><small>${task.deadline ? "Target date" : "Keep moving"}</small></div></div></div>`;
+}
+function detailStatusMarkup(task, progress) {
+  const status = taskStatusLabel(task);
+  const statusClass = progress >= 100 ? "done" : status === "Confirm completion" ? "pending" : "";
+  return `<div class="detail-status-row"><div class="detail-status-item"><span class="detail-label">STATUS</span><span class="status-pill ${statusClass}">${status}</span></div><div class="detail-status-item detail-status-progress"><span class="detail-label">PROGRESS</span><div class="detail-status-track"><span style="width:${Math.min(100, Math.max(0, progress))}%"></span></div><strong>${progress}%</strong></div></div>`;
+}
+function renderLongTermReadonlyTaskDetail(task) {
+  const progress = taskProgress(task);
+  const estimatedMinutes = Math.round((Number(task.estimateHours) || 0) * 60);
+  const actualDuration = trackedMinutes(task);
+  const children = task.children || [];
+  return `<div class="detail-readonly long-term-detail"><div class="detail-intro" style="--task-color:${taskColor(task)}"><div class="detail-label">${TYPE_LABEL[task.type] || "Long-term task"}</div><p class="detail-description">${escapeHtml(task.notes || "No notes added yet.")}</p></div>${detailScheduleMarkup(task, estimatedMinutes)}${detailStatusMarkup(task, progress)}<div class="detail-block detail-time-comparison"><div class="detail-block-header"><div><div class="detail-label">Focus time</div></div><button type="button" class="detail-inline-button" data-open-time-log="${task.id}" data-time-child="">Edit actual</button></div><div class="detail-focus-metrics"><div><strong>${formatTrackedMinutes(actualDuration)}</strong><span>Actual</span></div><div><strong>${formatTrackedMinutes(estimatedMinutes)}</strong><span>Estimated</span></div></div><div class="time-comparison-track"><span style="width:${estimatedMinutes ? Math.min(100, actualDuration / estimatedMinutes * 100) : 0}%"></span></div></div><div class="detail-block detail-stages-block"><div class="detail-block-header"><div><div class="detail-label">Stages</div><div class="detail-value">Subtask timeline</div></div><span class="muted-label">${children.length} ${children.length === 1 ? "stage" : "stages"}</span></div><div class="long-term-stage-timeline">${children.length ? children.map((child) => `<div class="long-term-stage-row ${child.status === "done" ? "done" : ""}"><button type="button" class="long-term-stage-toggle" data-toggle-child="${task.id}" data-child-id="${child.id}" aria-label="${child.status === "done" ? "Mark incomplete" : "Mark complete"}">${child.status === "done" ? "✓" : "○"}</button><div class="long-term-stage-copy"><strong>${escapeHtml(child.title)}</strong><span>${escapeHtml(child.date ? formatEnglishDate(child.date) : "Date not set")}</span></div><button type="button" class="long-term-stage-time" data-open-time-log="${task.id}" data-time-child="${child.id}" aria-label="Log actual time">◷</button></div>`).join("") : `<div class="detail-help">No stages yet.</div>`}</div></div><div class="detail-help">Progress is read-only and derived from completed stage estimate time.</div></div>`;
+}
+function renderReadonlyTaskDetail(task) {
+  if (task.type === "long-term") return renderLongTermReadonlyTaskDetail(task);
+  const progress = taskProgress(task);
+  const estimatedMinutes = Math.round((Number(task.estimateHours) || 0) * 60);
+  const actualDuration = trackedMinutes(task);
+  const stages = task.children?.length ? task.children : [{ title: task.title, status: task.status, progress, startTime: task.startTime, endTime: task.endTime, date: task.scheduledDate, actualDuration }];
+  return `<div class="detail-readonly"><div class="detail-intro" style="--task-color:${taskColor(task)}"><div class="detail-label">${TYPE_LABEL[task.type] || "Task"}</div><p class="detail-description">${escapeHtml(task.notes || "No notes added yet.")}</p></div>${detailScheduleMarkup(task, estimatedMinutes)}${detailStatusMarkup(task, progress)}<div class="detail-block detail-time-comparison"><div class="detail-block-header"><div><div class="detail-label">Focus time</div></div><button type="button" class="detail-inline-button" data-open-time-log="${task.id}" data-time-child="">Edit actual</button></div><div class="detail-focus-metrics"><div><strong>${formatTrackedMinutes(actualDuration)}</strong><span>Actual</span></div><div><strong>${formatTrackedMinutes(estimatedMinutes)}</strong><span>Estimated</span></div></div><div class="time-comparison-track"><span style="width:${estimatedMinutes ? Math.min(100, actualDuration / estimatedMinutes * 100) : 0}%"></span></div></div><div class="detail-block detail-stages-block"><div class="detail-block-header"><div><div class="detail-label">Stages</div><div class="detail-value">Subtask timeline</div></div><span class="muted-label">${stages.length} ${stages.length === 1 ? "stage" : "stages"}</span></div><div class="task-stage-timeline">${stages.map((stage) => `<div class="task-stage ${stage.status === "done" ? "done" : ""}"><span class="task-stage-marker">${stage.status === "done" ? "✓" : ""}</span><div class="task-stage-content"><strong>${escapeHtml(stage.title)}</strong><span>${escapeHtml(stage.date ? formatEnglishDate(stage.date) : "Date not set")} · ${escapeHtml(detailTimeLabel(stage.startTime, stage.endTime))}</span><small>${stage.status === "done" ? "Completed" : `${clampProgress(stage.progress)}% complete`} · ${formatTrackedMinutes(stage.actualDuration ?? 0)} focused</small></div></div>`).join("")}</div></div><div class="detail-actions"><span class="detail-label detail-action-label">Update progress</span><button type="button" data-set-progress="${task.id}" data-progress="25">25%</button><button type="button" data-set-progress="${task.id}" data-progress="50">50%</button><button type="button" data-set-progress="${task.id}" data-progress="75">75%</button></div></div>`;
 }
 function renderEditableTaskDetail(task) {
   const progress = progressForTask(task);
@@ -910,14 +886,15 @@ function renderEditableTaskDetail(task) {
   const progressEditor = isDerivedProgress
     ? `<div class="progress-editor"><div class="detail-label">Progress</div><div class="readonly-field progress-readonly" id="editProgressReadonly">${progress}%</div><div class="detail-help">Long-term progress is calculated from completed subtasks.</div></div>`
     : `<div class="progress-editor"><div class="detail-label">${task.type === "regular" && task.children?.length ? "Parent progress override" : "Progress"}</div><div class="progress-quick-actions" role="group" aria-label="Quick progress"><button type="button" class="${progress === 0 ? "active" : ""}" data-edit-progress="0">0%</button><button type="button" class="${progress === 25 ? "active" : ""}" data-edit-progress="25">25%</button><button type="button" class="${progress === 50 ? "active" : ""}" data-edit-progress="50">50%</button><button type="button" class="${progress === 75 ? "active" : ""}" data-edit-progress="75">75%</button></div><input id="editProgress" type="hidden" value="${progress}" /><div class="detail-progress" id="detailProgressPreview">${energyMarkup(progress)}<div class="progress-number">${progress}%${progress === 100 ? " ^-^" : ""}</div></div>${task.type === "regular" && task.children?.length ? `<div class="detail-help">Choose a preset percentage for the parent. Child completion remains the source of truth when no override is needed.</div>` : ""}</div>`;
-  return `<div class="detail-block"><div class="form-grid"><label>Title<input id="editTitle" value="${escapeHtml(task.title)}" maxlength="120" /></label><label>Type<div class="readonly-field">${TYPE_LABEL[task.type]}</div></label><label>Planned date<input id="editScheduledDate" type="date" value="${task.scheduledDate || selectedDate}" /></label><label>Deadline<input id="editDeadline" type="date" value="${task.deadline || ""}" /></label><label>Estimated hours<input id="editEstimateHours" type="number" min="0.25" step="0.25" value="${task.estimateHours || 1}" /></label><label>Difficulty<select id="editDifficulty"><option value="simple" ${task.difficulty === "simple" ? "selected" : ""}>Simple</option><option value="normal" ${task.difficulty === "normal" ? "selected" : ""}>Normal</option><option value="hard" ${task.difficulty === "hard" ? "selected" : ""}>Hard</option></select></label><label>Task color<select id="editTagColor">${tagColorOptions(taskColor(task))}</select></label><label>Start time<input id="editStartTime" type="time" value="${task.startTime || ""}" /></label><label>End time<input id="editEndTime" type="time" value="${task.endTime || ""}" /></label></div><label>Notes<textarea id="editNotes" rows="3">${escapeHtml(task.notes || "")}</textarea></label>${progressEditor}</div>${childBlock}<div class="detail-actions"><button type="button" data-open-timer="${task.id}" class="timer-button detail-timer-button" aria-label="Open Pomodoro timer">${playIcon()}<span>Focus</span></button></div>`;
+  return `<div class="detail-block"><div class="form-grid"><label>Title<input id="editTitle" value="${escapeHtml(task.title)}" maxlength="120" /></label><label>Type<div class="readonly-field">${TYPE_LABEL[task.type]}</div></label><label>Planned date<input id="editScheduledDate" type="date" value="${task.scheduledDate || selectedDate}" /></label><label>Deadline<input id="editDeadline" type="date" value="${task.deadline || ""}" /></label><label>Estimated hours<input id="editEstimateHours" type="number" min="0.25" step="0.25" value="${task.estimateHours || 1}" /></label><label>Difficulty<select id="editDifficulty"><option value="simple" ${task.difficulty === "simple" ? "selected" : ""}>Simple</option><option value="normal" ${task.difficulty === "normal" ? "selected" : ""}>Normal</option><option value="hard" ${task.difficulty === "hard" ? "selected" : ""}>Hard</option></select></label><label>Task color<select id="editTagColor">${tagColorOptions(taskColor(task))}</select></label><label>Start time<input id="editStartTime" type="time" value="${task.startTime || ""}" /></label><label>End time<input id="editEndTime" type="time" value="${task.endTime || ""}" /></label></div><label>Notes<textarea id="editNotes" rows="3">${escapeHtml(task.notes || "")}</textarea></label>${progressEditor}</div>${childBlock}<div class="detail-actions"><button type="button" class="detail-inline-button" data-open-time-log="${task.id}" data-time-child="">Edit actual time</button></div>`;
 }
 function bindTaskDetailControls(task) {
   $("#addSubtaskButton")?.addEventListener("click", () => addSubtask(task.id));
   $$(`[data-confirm-child]`).forEach((button) => button.addEventListener("click", () => confirmChild(task.id, Number(button.dataset.confirmChild))));
   $$(`[data-remove-child]`).forEach((button) => button.addEventListener("click", () => removeSubtask(task.id, Number(button.dataset.removeChild))));
   $$(`[data-set-progress]`).forEach((button) => button.addEventListener("click", () => setTaskProgress(button.dataset.setProgress, Number(button.dataset.progress), button.dataset.setChild || null)));
-  $$(`[data-open-timer]`).forEach((button) => button.addEventListener("click", () => openPomodoro(button.dataset.openTimer)));
+  $$(`[data-open-time-log]`).forEach((button) => button.addEventListener("click", () => openManualTimeModal(button.dataset.openTimeLog, button.dataset.timeChild || null)));
+  $$(`[data-toggle-child]`).forEach((button) => button.addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); toggleChildCompletion(button.dataset.toggleChild, button.dataset.childId); }));
   if (currentDetailMode !== "edit") return;
   $$(`[data-edit-progress]`).forEach((button) => button.addEventListener("click", () => {
     const next = clampProgress(button.dataset.editProgress);
@@ -1062,57 +1039,7 @@ async function setTaskProgress(taskId, progress, childId = null) {
   const result = await cloudSave;
   if (!result?.ok && result?.reason === "cloud-error") toast(`Progress saved locally; cloud sync failed: ${result.message || "check your connection"}.`);
 }
-function trackedSeconds(task) { return Math.max(0, Number(task.actualSeconds || (Number(task.actualMinutes || 0) * 60))); }
-function trackedMinutes(task) { return Math.floor(trackedSeconds(task) / 60); }
-function pomodoroElapsed() { if (!activePomodoro) return 0; return Math.max(0, Math.floor(activePomodoro.elapsedSeconds + (activePomodoro.running ? (Date.now() - activePomodoro.startedAt) / 1000 : 0))); }
-function pomodoroClock(seconds) { const value = Math.max(0, Math.round(seconds)); return `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`; }
-function renderPomodoro() {
-  if (!activePomodoro) return;
-  const task = state.tasks.find((item) => item.id === activePomodoro.taskId); if (!task) return;
-  const elapsed = pomodoroElapsed(); const remaining = Math.max(0, activePomodoro.targetSeconds - elapsed);
-  $("#pomodoroTaskTitle").textContent = task.title;
-  $("#pomodoroTaskEstimate").textContent = `${task.estimateHours || 0}h estimated · ${trackedMinutes(task)} min focused before this session`;
-  $("#pomodoroClock").textContent = pomodoroClock(remaining);
-  $("#pomodoroClock").classList.toggle("is-running", activePomodoro.running);
-  $("#pomodoroState").textContent = activePomodoro.running ? "Running" : elapsed ? "Paused" : "Ready";
-  $("#pomodoroStartButton").disabled = activePomodoro.running;
-  $("#pomodoroPauseButton").disabled = !activePomodoro.running;
-  if (remaining === 0 && activePomodoro.running) { activePomodoro.elapsedSeconds = activePomodoro.targetSeconds; activePomodoro.running = false; $("#pomodoroState").textContent = "Session complete"; toast("Pomodoro session complete. You can record it now."); }
-}
-function openPomodoro(taskId) { const task = state.tasks.find((item) => item.id === taskId); if (!task) return; activePomodoro = { taskId, elapsedSeconds: 0, startedAt: 0, running: false, targetSeconds: 25 * 60 }; renderPomodoro(); $("#pomodoroModal").showModal(); }
-function startPomodoro() { if (!activePomodoro || activePomodoro.running) return; activePomodoro.startedAt = Date.now(); activePomodoro.running = true; renderPomodoro(); }
-function pausePomodoro() { if (!activePomodoro || !activePomodoro.running) return; activePomodoro.elapsedSeconds = pomodoroElapsed(); activePomodoro.running = false; activePomodoro.startedAt = 0; renderPomodoro(); }
-async function endPomodoro() {
-  if (!activePomodoro) return;
-  pausePomodoro();
-  const sessionSeconds = Math.max(0, Math.round(activePomodoro.elapsedSeconds)); const taskId = activePomodoro.taskId;
-  if (!sessionSeconds) { toast("Start the Pomodoro before recording focus time."); return; }
-  const task = state.tasks.find((item) => item.id === taskId); if (!task) return;
-  task.actualSeconds = trackedSeconds(task) + sessionSeconds; task.actualMinutes = Math.floor(task.actualSeconds / 60);
-  const suggestedProgress = Math.min(100, Math.max(taskProgress(task), Math.round(taskProgress(task) + sessionSeconds / (Math.max(.25, Number(task.estimateHours) || 1) * 3600) * 100)));
-  pendingTimerSync = { taskId, suggestedProgress, sessionSeconds };
-  activePomodoro = null; $("#pomodoroModal").close();
-  const cloudSave = saveState({ immediate: true }); render();
-  const result = await cloudSave;
-  if (result?.ok) toast(`Focus recorded · ${Math.floor(sessionSeconds / 60)} min.`);
-  else if (result?.reason === "not-connected") toast("Focus recorded locally. Connect cloud sync to share it.");
-  else toast("Focus recorded locally; cloud sync is still pending.");
-  const latestTask = state.tasks.find((item) => item.id === taskId); if (!latestTask || latestTask.status === "done") { pendingTimerSync = null; return; }
-  $("#timerSyncMessage").textContent = `本次专注 ${Math.floor(sessionSeconds / 60)} 分钟。是否把任务进度更新到 ${suggestedProgress}%？`;
-  $("#timerSyncModal").showModal();
-}
-function syncTimerProgress(shouldSync) {
-  if (!pendingTimerSync) return;
-  const pending = pendingTimerSync; pendingTimerSync = null; $("#timerSyncModal").close();
-  if (!shouldSync) { toast("Focus recorded. Task progress left unchanged."); return; }
-  const task = state.tasks.find((item) => item.id === pending.taskId); if (!task) return;
-  if (task.type === "long-term") { toast("Long-term progress is calculated from subtasks."); return; }
-  if (task.type === "regular" && task.children?.length) task.progressOverride = pending.suggestedProgress;
-  task.progress = pending.suggestedProgress; task.status = pending.suggestedProgress >= 100 ? "pending_confirmation" : pending.suggestedProgress > 0 ? "in_progress" : "not_started";
-  const cloudSave = saveState({ immediate: true }); render();
-  if (pending.suggestedProgress >= 100) openCompletionPrompt(task.id);
-  cloudSave.then((result) => { if (result?.ok) toast("Task progress updated and synced."); else toast("Task progress updated locally; cloud sync is pending."); });
-}
+function trackedMinutes(task) { return Math.max(0, Math.round(Number(task.actualDuration) || 0)); }
 function findTaskTarget(taskId, childId = null) {
   const parent = state.tasks.find((item) => item.id === taskId);
   if (!parent) return null;
@@ -1134,6 +1061,40 @@ function updateChildRecord(parentId, childId, updater) {
   });
   return updated;
 }
+function toggleChildCompletion(parentId, childId) {
+  const record = findTaskTarget(parentId, childId);
+  if (!record) return;
+  const nextDone = record.target.status !== "done";
+  updateChildRecord(parentId, childId, (child) => ({ ...child, progress: nextDone ? 100 : 0, status: nextDone ? "done" : "not_started" }));
+  const cloudSave = saveState({ immediate: true });
+  const drawer = $("#taskDetailModal").classList.contains("drawer-mode");
+  render();
+  openTaskDetail(parentId, drawer, "readonly");
+  cloudSave.catch(() => {});
+}
+let manualTimeTarget = null;
+function openManualTimeModal(taskId, childId = null) {
+  const record = findTaskTarget(taskId, childId);
+  if (!record) return;
+  manualTimeTarget = { taskId, childId: childId || null };
+  $("#manualTimeTitle").textContent = record.target.title || record.parent.title;
+  $("#manualActualDuration").value = String(trackedMinutes(record.target));
+  $("#manualEstimatedDuration").textContent = formatTrackedMinutes(Math.round((Number(record.target.estimateHours) || 0) * 60));
+  $("#manualTimeModal").showModal();
+}
+function saveManualTime() {
+  if (!manualTimeTarget) return;
+  const record = findTaskTarget(manualTimeTarget.taskId, manualTimeTarget.childId);
+  if (!record) return;
+  const actualDuration = Math.max(0, Math.round(Number($("#manualActualDuration").value) || 0));
+  if (manualTimeTarget.childId) updateChildRecord(record.parent.id, manualTimeTarget.childId, (child) => ({ ...child, actualDuration }));
+  else state.tasks = state.tasks.map((task) => task.id === record.parent.id ? { ...task, actualDuration } : task);
+  const cloudSave = saveState({ immediate: true });
+  const drawer = $("#taskDetailModal").classList.contains("drawer-mode");
+  render();
+  if ($("#taskDetailModal").open) openTaskDetail(record.parent.id, drawer, "readonly");
+  cloudSave.catch(() => {});
+}
 function childProgressStatus(progress) { return progress >= 100 ? "pending_confirmation" : progress > 0 ? "in_progress" : "not_started"; }
 function completeTask(taskId, childId = null) {
   const record = findTaskTarget(taskId, childId);
@@ -1147,26 +1108,103 @@ function completeTask(taskId, childId = null) {
   render();
   showCompletionToast(target.title || parent.title, parent.id, target === parent ? null : target.id);
 }
+let taskQuickAction = null;
+let taskQuickConfirmAction = null;
+function quickActionRecord() { return taskQuickAction ? findTaskTarget(taskQuickAction.taskId, taskQuickAction.childId) : null; }
+function openTaskQuickAction(taskId, childId = null) {
+  const record = findTaskTarget(taskId, childId);
+  if (!record || (!childId && record.parent.type === "long-term")) return;
+  taskQuickAction = { taskId, childId: childId || null };
+  renderTaskQuickAction();
+  if (!$("#taskQuickActionModal").open) $("#taskQuickActionModal").showModal();
+}
+function renderTaskQuickAction() {
+  const record = quickActionRecord();
+  if (!record) { if ($("#taskQuickActionModal").open) $("#taskQuickActionModal").close(); return; }
+  const { parent, target } = record;
+  const progress = taskProgress(target);
+  const completed = target.status === "done";
+  const title = escapeHtml(target.title || parent.title);
+  const content = completed
+    ? `<div class="quick-action-header"><div><div class="section-kicker">COMPLETED</div><h2>I've Done It</h2><p class="quick-action-task-name">${title}</p></div><button class="icon-button" value="cancel" formnovalidate aria-label="Close">×</button></div><div class="quick-completed-state"><div class="quick-completed-face">^-^</div><div class="quick-progress-grid">${energyMarkup(100)}</div><strong>great!</strong></div><div class="modal-actions"><button class="secondary-button" value="cancel" formnovalidate>Close</button><button class="quick-reset-button" id="quickResetButton" type="button" aria-label="Reset completed task">↺</button></div>`
+    : `<div class="quick-action-header"><div><div class="section-kicker">QUICK PROGRESS</div><h2>${title}</h2></div><button class="icon-button" value="cancel" formnovalidate aria-label="Close">×</button></div><div class="quick-progress-grid" id="quickProgressGrid">${energyMarkup(progress)}</div><div class="quick-progress-value" id="quickProgressValue">${progress}%</div><div class="quick-progress-adjust"><button class="quick-adjust-button" id="quickProgressMinus" type="button" aria-label="Decrease progress">−</button><button class="quick-adjust-button" id="quickProgressPlus" type="button" aria-label="Increase progress">+</button></div><div class="modal-actions"><button class="secondary-button" value="cancel" formnovalidate>Close</button><button class="quick-complete-button" id="quickCompleteButton" type="button" aria-label="Complete task">✓</button></div>`;
+  $("#taskQuickActionContent").innerHTML = content;
+  if (completed) {
+    $("#quickResetButton")?.addEventListener("click", () => openTaskQuickConfirm("reset"));
+    return;
+  }
+  $("#quickProgressMinus")?.addEventListener("click", () => updateQuickActionProgress(progress - 10));
+  $("#quickProgressPlus")?.addEventListener("click", () => updateQuickActionProgress(progress + 10));
+  $("#quickCompleteButton")?.addEventListener("click", () => openTaskQuickConfirm("complete"));
+}
+function updateQuickActionProgress(nextProgress) {
+  const record = quickActionRecord();
+  if (!record) return;
+  const progress = clampProgress(nextProgress);
+  const { parent } = record;
+  if (taskQuickAction.childId) updateChildRecord(parent.id, taskQuickAction.childId, (child) => ({ ...child, progress, status: childProgressStatus(progress) }));
+  else if (parent.type !== "long-term") state.tasks = state.tasks.map((task) => task.id === parent.id ? { ...task, ...(task.type === "regular" && task.children?.length ? { progressOverride: progress } : {}), progress, status: childProgressStatus(progress) } : task);
+  else return;
+  saveState({ immediate: true });
+  render();
+  renderTaskQuickAction();
+}
+function openTaskQuickConfirm(action) {
+  if (!quickActionRecord()) return;
+  taskQuickConfirmAction = action;
+  const title = quickActionRecord().target.title || quickActionRecord().parent.title;
+  $("#taskQuickConfirmMessage").textContent = action === "reset" ? `Reset “${title}” to 0%?` : `Mark “${title}” as complete?`;
+  $("#taskQuickConfirmDialog").showModal();
+}
+function closeTaskQuickConfirm() { if ($("#taskQuickConfirmDialog").open) $("#taskQuickConfirmDialog").close(); taskQuickConfirmAction = null; }
+function finalizeTaskQuickAction(action) {
+  const record = quickActionRecord();
+  if (!record) return;
+  const { parent } = record;
+  if (!taskQuickAction.childId && parent.type === "long-term") return;
+  if (action === "complete") {
+    if (taskQuickAction.childId) updateChildRecord(parent.id, taskQuickAction.childId, (child) => ({ ...child, progress: 100, status: "done" }));
+    else state.tasks = state.tasks.map((task) => task.id === parent.id ? { ...task, progress: 100, status: "done", progressOverride: undefined } : task);
+  } else if (taskQuickAction.childId) updateChildRecord(parent.id, taskQuickAction.childId, (child) => ({ ...child, progress: 0, status: "not_started" }));
+  else state.tasks = state.tasks.map((task) => task.id === parent.id ? { ...task, progress: 0, status: "not_started", progressOverride: undefined } : task);
+  const title = record.target.title || parent.title;
+  const childId = taskQuickAction.childId;
+  const cloudSave = saveState({ immediate: true });
+  closeTaskQuickConfirm();
+  if ($("#taskQuickActionModal").open) $("#taskQuickActionModal").close();
+  taskQuickAction = null;
+  render();
+  if (action === "complete") showCompletionToast(title, parent.id, childId);
+  else toast("Task reset to 0%.");
+  cloudSave.catch(() => {});
+}
 function recordFocusTime(taskId, minutes, childId = null) {
   const record = findTaskTarget(taskId, childId);
   if (!record) return;
-  const seconds = Math.max(0, Number(minutes) || 0) * 60;
-  record.target.actualSeconds = trackedSeconds(record.target) + seconds;
-  record.target.actualMinutes = Math.floor(record.target.actualSeconds / 60);
+  const addedMinutes = Math.max(0, Math.round(Number(minutes) || 0));
+  const actualDuration = trackedMinutes(record.target) + addedMinutes;
+  if (childId) updateChildRecord(record.parent.id, childId, (child) => ({ ...child, actualDuration }));
+  else state.tasks = state.tasks.map((task) => task.id === record.parent.id ? { ...task, actualDuration } : task);
   saveState({ immediate: true });
   render();
-  toast(`Recorded +${minutes}m focus time.`);
+  toast(`Recorded +${addedMinutes}m focus time.`);
 }
 function showCompletionToast(title, taskId, childId = null) {
   const element = $("#toast");
   clearTimeout(toast.timer);
-  element.innerHTML = `<span>${escapeHtml(title)} completed. Add focus time?</span><div class="toast-actions"><button type="button" data-toast-focus="30">+30m</button><button type="button" data-toast-focus="60">+1h</button></div>`;
+  element.innerHTML = `<span>${escapeHtml(title)} completed. Do you want to log focus time?</span><div class="toast-actions"><button type="button" data-toast-focus="30">+30m</button><button type="button" data-toast-focus="60">+1h</button><button type="button" data-toast-focus="120">+2h</button><label class="toast-custom-time"><input data-toast-custom-minutes type="number" min="1" step="5" placeholder="min" aria-label="Custom minutes" /></label><button type="button" data-toast-focus-custom>+ Add</button></div>`;
   element.classList.add("show", "completion-toast");
   element.querySelectorAll("[data-toast-focus]").forEach((button) => button.addEventListener("click", () => {
     hideToast();
     recordFocusTime(taskId, Number(button.dataset.toastFocus), childId);
   }));
-  toast.timer = setTimeout(hideToast, 1000);
+  element.querySelector("[data-toast-focus-custom]")?.addEventListener("click", () => {
+    const minutes = Number(element.querySelector("[data-toast-custom-minutes]")?.value);
+    if (!Number.isFinite(minutes) || minutes <= 0) return;
+    hideToast();
+    recordFocusTime(taskId, minutes, childId);
+  });
+  toast.timer = setTimeout(hideToast, 5000);
 }
 function hideToast() {
   const element = $("#toast");
@@ -1194,8 +1232,7 @@ function createTask(event) {
     difficulty: "normal",
     progress: 0,
     status: "not_started",
-    actualSeconds: 0,
-    actualMinutes: 0,
+    actualDuration: 0,
     startTime: "",
     endTime: "",
     children: [],
@@ -1289,15 +1326,14 @@ $("#saveTaskButton").addEventListener("click", saveTaskChanges);
 $("#editTaskButton").addEventListener("click", () => { if (currentDetailTaskId) openTaskDetail(currentDetailTaskId, $("#taskDetailModal").classList.contains("drawer-mode"), "edit"); });
 $("#confirmCompleteButton").addEventListener("click", () => { const button = $("#confirmCompleteButton"); completeTask(button.dataset.completeTask); });
 $("#taskDetailModal").addEventListener("close", () => { $("#taskDetailModal").classList.remove("drawer-mode"); currentDetailMode = "readonly"; });
-$("#pomodoroStartButton").addEventListener("click", startPomodoro);
-$("#pomodoroPauseButton").addEventListener("click", pausePomodoro);
-$("#pomodoroEndButton").addEventListener("click", endPomodoro);
-$("#pomodoroModal").addEventListener("close", () => { activePomodoro = null; });
-$("#timerSyncYesButton").addEventListener("click", () => syncTimerProgress(true));
-$("#timerSyncNoButton").addEventListener("click", () => syncTimerProgress(false));
-$("#timerSyncModal").addEventListener("close", () => { pendingTimerSync = null; });
+$("#manualActualDuration").addEventListener("change", saveManualTime);
+$("#manualTimeModal").addEventListener("close", () => { manualTimeTarget = null; });
 $("#confirmCompletionButton").addEventListener("click", (event) => { event.preventDefault(); applyPendingCompletion(); });
 $("#completionModal").addEventListener("close", () => { if ($("#completionModal").returnValue === "cancel") pendingCompletion = null; });
+$("#taskQuickConfirmCancel").addEventListener("click", closeTaskQuickConfirm);
+$("#taskQuickConfirmYes").addEventListener("click", () => { const action = taskQuickConfirmAction; if (action) finalizeTaskQuickAction(action); });
+$("#taskQuickConfirmDialog").addEventListener("close", () => { taskQuickConfirmAction = null; });
+$("#taskQuickActionModal").addEventListener("close", () => { taskQuickAction = null; taskQuickConfirmAction = null; if ($("#taskQuickConfirmDialog").open) $("#taskQuickConfirmDialog").close(); });
 $("#saveHabitButton").addEventListener("click", (event) => { event.preventDefault(); saveHabitChanges(); });
 $("#deleteHabitButton").addEventListener("click", deleteHabit);
 $("#cloudLoginButton").addEventListener("click", openAuthModal);
@@ -1328,6 +1364,5 @@ window.addEventListener("online", async () => { if (cloudSession) await hydrateS
 function closeSidebar() { $("#sidebar").classList.remove("open"); $("#scrim").classList.remove("open"); }
 function resetPageScroll() { window.scrollTo({ top: 0, left: 0, behavior: "auto" }); document.documentElement.scrollTop = 0; document.body.scrollTop = 0; $(".main-column")?.scrollTo({ top: 0, left: 0, behavior: "auto" }); }
 
-window.setInterval(() => { if (activePomodoro?.running) renderPomodoro(); }, 1000);
 render();
 initCloudSync();

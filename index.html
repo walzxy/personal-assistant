@@ -240,20 +240,29 @@
       </form>
     </dialog>
 
-    <dialog class="modal pomodoro-modal" id="pomodoroModal">
-      <form method="dialog" id="pomodoroForm">
-        <div class="modal-header"><div><div class="section-kicker">POMODORO FOCUS</div><h2 id="pomodoroTaskTitle">Task</h2><p class="detail-help" id="pomodoroTaskEstimate">25-minute focus session</p></div><button class="icon-button" value="cancel" formnovalidate aria-label="关闭">×</button></div>
-        <div class="pomodoro-clock-wrap"><div class="pomodoro-clock" id="pomodoroClock">25:00</div><div class="pomodoro-state" id="pomodoroState">Ready</div></div>
-        <div class="pomodoro-actions"><button class="secondary-button" id="pomodoroStartButton" type="button">开始</button><button class="secondary-button" id="pomodoroPauseButton" type="button" disabled>暂停</button><button class="primary-button" id="pomodoroEndButton" type="button">结束并记录</button></div>
-        <p class="pomodoro-help">计时只在弹窗内运行；关闭弹窗不会写入任务，只有“结束并记录”才会保存实际专注时长。</p>
+    <dialog class="modal task-quick-modal" id="taskQuickActionModal">
+      <form method="dialog" id="taskQuickActionForm">
+        <div id="taskQuickActionContent"></div>
       </form>
     </dialog>
 
-    <dialog class="modal completion-modal" id="timerSyncModal">
-      <form method="dialog" id="timerSyncForm">
-        <div class="modal-header"><div><div class="section-kicker">FOCUS RECORDED</div><h2>Update task progress?</h2></div><button class="icon-button" value="cancel" formnovalidate aria-label="关闭">×</button></div>
-        <p id="timerSyncMessage" class="completion-message">是否同步更新任务进度条？</p>
-        <div class="modal-actions"><button class="secondary-button" id="timerSyncNoButton" type="button">Keep current progress</button><button class="primary-button" id="timerSyncYesButton" type="button">Update progress</button></div>
+    <dialog class="modal quick-confirm-modal" id="taskQuickConfirmDialog">
+      <form method="dialog" id="taskQuickConfirmForm">
+        <div class="modal-header"><div><div class="section-kicker">CONFIRM</div><h2>Are you sure?</h2></div></div>
+        <p class="completion-message" id="taskQuickConfirmMessage">Are you sure?</p>
+        <div class="modal-actions"><button class="secondary-button" id="taskQuickConfirmCancel" type="button">em...</button><button class="primary-button" id="taskQuickConfirmYes" type="button">Yes</button></div>
+      </form>
+    </dialog>
+
+    <dialog class="modal manual-time-modal" id="manualTimeModal">
+      <form method="dialog" id="manualTimeForm">
+        <div class="modal-header"><div><div class="section-kicker">TIME LOG</div><h2 id="manualTimeTitle">Record actual time</h2></div><button class="icon-button" value="cancel" formnovalidate aria-label="Close">×</button></div>
+        <div class="manual-time-grid">
+          <label>Actual (minutes)<input id="manualActualDuration" type="number" min="0" step="5" inputmode="numeric" /></label>
+          <div class="manual-time-readonly"><span>Estimated</span><strong id="manualEstimatedDuration">0m</strong><small>Go to Edit to change this.</small></div>
+        </div>
+        <p class="detail-help">Your entry is saved when it changes.</p>
+        <div class="modal-actions"><button class="secondary-button" value="cancel" formnovalidate>Close</button></div>
       </form>
     </dialog>
 
@@ -277,6 +286,6 @@
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js?v=20261023-2" type="module"></script>
+    <script src="app.js?v=20261023-3" type="module"></script>
   </body>
 </html>

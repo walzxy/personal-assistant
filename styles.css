@@ -160,8 +160,6 @@ h2 { font-size: 19px; letter-spacing: -.025em; margin-top: 6px; }
 .kanban-card-title .task-color-dot { flex: 0 0 auto; margin: 4px 0 0; }
 .kanban-card-meta { display: flex; justify-content: space-between; gap: 7px; color: var(--muted); font-size: 10px; margin-top: 9px; }
 .kanban-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 9px; margin-top: 11px; }
-.timer-button { border: 0; border-radius: 8px; padding: 7px 9px; color: var(--cold-deep); background: #edf2f5; font-size: 10px; font-weight: 700; }
-.timer-button:hover { background: #e1e9ee; }
 .battery-progress { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .battery-progress .energy-grid { flex: 1; }
 .battery-progress .battery-value { color: var(--muted); font-size: 10px; white-space: nowrap; }
@@ -224,8 +222,6 @@ h1, h2, h3, .date-label, .stat-value, .progress-number, .timeline-time, .calenda
 .kanban-board { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; gap: 14px; padding: 2px 4px 12px 0; }
 .kanban-column { flex: 0 0 min(760px, calc(100% - 70px)); scroll-snap-align: start; }
 .kanban-card-footer .battery-progress.vertical .battery-value { font-family: "Space Grotesk", Inter, system-ui, sans-serif; }
-.timer-button.running { color: #557b62; background: #dfede3; box-shadow: inset 0 0 0 1px rgba(95,148,104,.25); }
-.timer-button.running::before { content: "●"; color: var(--green); margin-right: 4px; }
 .week-grid { --calendar-slot-height: 10px; }
 .calendar-task-item { border-radius: 2px; padding: 8px 10px; }
 .calendar-task-title { font-size: clamp(10px, 1vw, 13px); line-height: 1.25; }.calendar-task-time { font-size: clamp(9px, .85vw, 11px); margin-top: 4px; }
@@ -289,12 +285,6 @@ h1, h2, h3, .date-label, .stat-value, .progress-number, .timeline-time, .calenda
 .subtask-marker { color: var(--cold-deep); font-size: 10px; }
 .detail-arrow { font-size: 22px; min-width: 34px; min-height: 34px; }
 .long-term-card { cursor: pointer; }
-.timer-button { display: inline-grid; place-items: center; width: 32px; height: 30px; padding: 0; font-size: 15px; line-height: 1; }
-.timer-button .timer-icon { width: 15px; height: 15px; display: block; }
-.detail-timer-button { width: auto; min-width: 92px; padding: 8px 10px; gap: 6px; }
-.timer-button.running { font-size: 14px; }
-.timer-button.running::before { display: none; }
-.kanban-card-footer .timer-button { flex: 0 0 32px; }
 .calendar-task-item { box-sizing: border-box; width: 100%; border-radius: 2px; padding: 4px 6px; }
 .calendar-task-title, .calendar-task-time { font-size: clamp(9px, 1vw, 13px); line-height: 1.2; }
 .calendar-task-time { margin-top: 3px; }
@@ -353,7 +343,7 @@ button.calendar-cell { border: 0; color: inherit; text-align: left; font: inheri
   .new-action-option { min-height: 68px; padding: 16px; }
 }
 
-/* Pomodoro timer and task-state separation */
+/* Task-state separation */
 .timeline-item.course { background: #eef2f4; border-color: #e4e9ec; color: #6f7d86; }
 .timeline-item.course .timeline-line { width: 3px; background: #cbd5dc; }
 .timeline-item.task { background: #fff; border-left: 5px solid var(--task-color, #8ea1b5); }
@@ -372,17 +362,7 @@ button.calendar-cell { border: 0; color: inherit; text-align: left; font: inheri
 .week-grid { touch-action: pan-y; }
 .calendar-task-item { touch-action: pan-y; user-select: none; }
 .calendar-task-item.touch-dragging { opacity: .58; outline: 2px solid var(--cold-deep); cursor: grabbing; }
-.pomodoro-modal { width: min(500px, calc(100vw - 28px)); }
-.pomodoro-clock-wrap { display: grid; justify-items: center; gap: 9px; padding: 18px 0 8px; }
-.pomodoro-clock { color: var(--cold-deep); font: 600 clamp(56px, 13vw, 92px) "Space Grotesk", Inter, sans-serif; letter-spacing: -.06em; font-variant-numeric: tabular-nums; }
-.pomodoro-clock.is-running { color: var(--green); }
-.pomodoro-state { color: var(--muted); font-size: 12px; }
-.pomodoro-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 20px; }
-.pomodoro-actions button { min-height: 44px; }
-.pomodoro-help { color: var(--muted); font-size: 11px; line-height: 1.65; margin-top: 17px; text-align: center; }
 @media (max-width: 520px) {
-  .pomodoro-actions { grid-template-columns: 1fr; }
-  .pomodoro-actions button { width: 100%; }
   .timeline-progress { max-width: 100%; }
   .subtask-row-actions .detail-inline-button { min-width: 70px; }
 }
@@ -578,6 +558,28 @@ button.calendar-cell { border: 0; color: inherit; text-align: left; font: inheri
 .task-stage-content { padding-bottom: 17px; }
 .stage-progress-actions { margin-top: 8px; }
 .stage-progress-actions .detail-label { font-size: 9px; }
+.long-term-stage-timeline { position: relative; display: grid; gap: 0; margin-top: 17px; padding-left: 2px; }
+.long-term-stage-timeline::before { content: ""; position: absolute; left: 11px; top: 21px; bottom: 21px; width: 1px; background: #d3ddde; }
+.long-term-stage-row { position: relative; z-index: 1; display: grid; grid-template-columns: 24px minmax(0, 1fr) 34px; gap: 11px; align-items: center; min-height: 66px; }
+.long-term-stage-toggle { display: grid; place-items: center; width: 21px; height: 21px; border: 2px solid #b8c4d0; border-radius: 50%; background: #fff; color: var(--cold-deep); font-size: 12px; font-weight: 700; box-shadow: 0 0 0 3px #fff; cursor: pointer; transition: background .2s ease, border-color .2s ease, transform .2s ease; }
+.long-term-stage-toggle:hover { transform: scale(1.06); }
+.long-term-stage-row.done .long-term-stage-toggle { border-color: #86a3a3; background: #dfede3; color: #557b62; }
+.long-term-stage-copy { display: grid; gap: 4px; min-width: 0; padding: 9px 0; }
+.long-term-stage-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.long-term-stage-copy span { color: var(--muted); font-size: 10px; }
+.long-term-stage-time { justify-self: end; width: 30px; height: 30px; border: 1px solid #d5dfe5; border-radius: 9px; background: #edf2f5; color: var(--cold-deep); font-size: 17px; line-height: 1; cursor: pointer; transition: background .2s ease, transform .2s ease; }
+.long-term-stage-time:hover { background: #e1e9ee; transform: translateY(-1px); }
+.manual-time-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.manual-time-readonly { display: grid; align-content: start; gap: 7px; padding: 10px 11px; border: 1px solid #e8e2dc; border-radius: 10px; background: #f3f1ed; color: var(--muted); font-size: 11px; }
+.manual-time-readonly strong { color: var(--ink); font: 600 20px "Space Grotesk", Inter, sans-serif; }
+.manual-time-readonly small { font-size: 10px; line-height: 1.45; }
+.toast.completion-toast { max-width: min(620px, calc(100vw - 24px)); }
+.toast-custom-time input { width: 62px; margin: 0; padding: 6px 7px; border: 1px solid rgba(255,255,255,.24); border-radius: 7px; background: rgba(255,255,255,.12); color: #fff; font: 11px Inter, sans-serif; }
+.toast-custom-time input::placeholder { color: rgba(255,255,255,.7); }
+@media (max-width: 520px) {
+  .manual-time-grid { grid-template-columns: 1fr; gap: 0; }
+  .long-term-stage-row { grid-template-columns: 24px minmax(0, 1fr) 32px; gap: 8px; }
+}
 
 @media (max-width: 760px) {
   .detail-schedule-card { grid-template-columns: minmax(0, 1fr) 44px minmax(0, 1fr); gap: 6px; padding: 15px 10px; }
@@ -636,3 +638,33 @@ button.calendar-cell { border: 0; color: inherit; text-align: left; font: inheri
   .agenda-list { max-height: 48vh; }
   .agenda-card { min-height: 60px; }
 }
+
+/* Task quick actions: card-level progress and reset loop */
+.task-status-button { display: grid; place-items: center; flex: 0 0 29px; width: 29px; height: 29px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--cold-deep); font: 400 24px/1 Inter, sans-serif; transition: color .2s ease, background .2s ease, transform .2s ease; }
+.task-status-button:hover, .task-status-button:focus-visible { color: var(--ink); background: #edf2f5; transform: scale(1.08); outline: 0; }
+.task-status-button.completed { color: var(--green); font-size: 20px; }
+.task-status-button.completed:hover, .task-status-button.completed:focus-visible { color: #487e55; background: #e1eee3; }
+.task-footer-actions .task-status-button { margin-right: 1px; }
+.kanban-card-actions .task-status-button { flex: 0 0 29px; }
+.task-quick-modal { width: min(360px, calc(100vw - 30px)); }
+.task-quick-modal form, .quick-confirm-modal form { padding: 22px; }
+.quick-action-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 20px; }
+.quick-action-header h2 { max-width: 260px; margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quick-action-task-name { margin-top: 7px; color: var(--muted); font-size: 11px; }
+.quick-progress-grid { padding: 9px 0; }
+.quick-progress-grid .battery-progress { display: block; }
+.quick-progress-grid .energy-grid { gap: 5px; }
+.quick-progress-grid .energy-cell { height: 13px; border-radius: 4px; }
+.quick-progress-value { margin-top: 10px; color: var(--cold-deep); font: 600 22px "Space Grotesk", Inter, sans-serif; text-align: center; }
+.quick-progress-adjust { display: flex; justify-content: center; gap: 12px; margin-top: 15px; }
+.quick-adjust-button, .quick-complete-button, .quick-reset-button { display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid #d5dfe5; border-radius: 50%; color: var(--cold-deep); background: #edf2f5; font: 600 22px/1 "Space Grotesk", Inter, sans-serif; transition: background .2s ease, color .2s ease, box-shadow .2s ease, transform .2s ease; }
+.quick-adjust-button:hover, .quick-adjust-button:focus-visible, .quick-reset-button:hover, .quick-reset-button:focus-visible { color: #fff; background: var(--cold-deep); box-shadow: var(--shadow-hover); transform: translateY(-1px); outline: 0; }
+.quick-complete-button { color: #fff; border-color: var(--green); background: var(--green); font-size: 20px; }
+.quick-complete-button:hover, .quick-complete-button:focus-visible { background: #4f8159; box-shadow: var(--shadow-hover); transform: translateY(-1px); outline: 0; }
+.quick-completed-state { display: grid; justify-items: center; gap: 10px; padding: 6px 0 12px; }
+.quick-completed-face { color: var(--green); font: 600 30px "Space Grotesk", Inter, sans-serif; letter-spacing: .05em; }
+.quick-completed-state .quick-progress-grid { width: 100%; }
+.quick-completed-state > strong { color: var(--green); font: 600 14px "Space Grotesk", Inter, sans-serif; }
+.quick-reset-button { color: var(--warm-deep); background: #f5ede7; border-color: #eadbd1; }
+.quick-confirm-modal { width: min(340px, calc(100vw - 30px)); }
+.quick-confirm-modal .completion-message { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.6; }
